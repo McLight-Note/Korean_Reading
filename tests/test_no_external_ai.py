@@ -9,7 +9,7 @@ NETWORK = re.compile(r"\b(requests|urllib\.request|http\.client|aiohttp|httpx)\b
 
 def test_no_ai_sdk_or_keys():
     offenders = []
-    for p in list((ROOT / "backend").rglob("*.py")) + [ROOT / "requirements.txt", *(ROOT / "frontend").glob("*")]:
+    for p in list((ROOT / "backend").rglob("*.py")) + [*ROOT.glob("requirements*.txt"), *(ROOT / "public").glob("*")]:
         if FORBIDDEN.search(p.read_text(encoding="utf-8")):
             offenders.append(str(p))
     assert not offenders

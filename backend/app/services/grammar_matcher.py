@@ -158,7 +158,7 @@ def match_sentence(rules: list[Rule], sent: Sentence) -> list[Match]:
                     end = max(end, _word_end_of(sent, last))        # include endings: 있어요, 없었다
                 key = (rule.item_id, start, end)
                 if key not in found:
-                    found[key] = {"rule": rule, "ep": used_ep, "slots": alt["slots"]}
+                    found[key] = {"rule": rule, "ep": used_ep, "slots": alt["slots"], "core": sent.morphs[mi].start}
     matches = _group(found, sent)
     _flag_nested(matches)
     matches.extend(_uncovered(matches, sent))
@@ -204,7 +204,7 @@ def _group(found: dict, sent: Sentence) -> list[Match]:
         out.append(Match("grammar", _text_slice(sent, s, e), s, e, sent.index, sent.paragraph, rule.pattern, rule.item_id,
                          mtype, status, conf, rule_id=str(rule.item_id),
                          candidates=[{"id": i["rule"].item_id, "pattern": i["rule"].pattern, "level": i["rule"].level,
-                                      "status": i["rule"].status} for i in infos], note=note))
+                                      "status": i["rule"].status} for i in infos], note=note, core_start=best["core"]))
     return out
 
 

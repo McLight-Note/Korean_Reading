@@ -139,6 +139,13 @@ CREATE TABLE IF NOT EXISTS saved_item (
   UNIQUE(kind, ref_id)
 );
 
+-- Single-user learning state (cards, review log, exercise log, reading progress, passage questions) as one JSON document.
+CREATE TABLE IF NOT EXISTS study_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  json TEXT NOT NULL,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS passage_sentence (
   passage_id INTEGER NOT NULL REFERENCES passage(id) ON DELETE CASCADE,
   no INTEGER NOT NULL,
@@ -147,3 +154,23 @@ CREATE TABLE IF NOT EXISTS passage_sentence (
   "end" INTEGER NOT NULL,
   PRIMARY KEY (passage_id, no)
 );
+
+-- Workbook exercises / listening scripts, verbatim OCR (draft, unreviewed). One row per 연습 or per script page.
+CREATE TABLE IF NOT EXISTS workbook_item (
+  id INTEGER PRIMARY KEY,
+  source_id INTEGER REFERENCES source(id) ON DELETE CASCADE,
+  level TEXT,
+  section TEXT,                      -- vocabulary | grammar | pattern_practice | listening | reading | ... | script
+  unit INTEGER,                      -- only when it could be inferred from the joined grammar item
+  grammar_id INTEGER REFERENCES grammar_item(id) ON DELETE SET NULL,
+  heading TEXT,                      -- grammar heading as printed in the workbook
+  match_score REAL,                  -- similarity between heading and the grammar item it was joined to
+  exercise_no TEXT,
+  instruction TEXT,
+  body TEXT,
+  pdf_page INTEGER,
+  printed_page INTEGER,
+  status TEXT NOT NULL DEFAULT 'needs_review'
+);
+CREATE INDEX IF NOT EXISTS idx_wb_grammar ON workbook_item(grammar_id);
+CREATE INDEX IF NOT EXISTS idx_wb_level ON workbook_item(level, section);

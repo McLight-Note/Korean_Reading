@@ -1,0 +1,17 @@
+# What is NOT uploaded to Vercel. (When this file exists the CLI uses it instead of .gitignore, so the
+# gitignored deploy/app.sqlite IS uploaded, which is intended.)
+.venv
+.git
+data
+tests
+scripts
+.pytest_cache
+__pycache__
+*.pdf
+*.png
+.DS_Store
+README.md
+requirements-dev.txt
+.env*
+.vercel
+scripts

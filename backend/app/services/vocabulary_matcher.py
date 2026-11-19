@@ -32,6 +32,7 @@ class Match:
     rule_id: str | None = None
     candidates: list[dict] = field(default_factory=list)
     note: str | None = None
+    core_start: int | None = None     # grammar: where the pattern's own morphemes begin (after the stem); used for cloze blanks
 
 
 class VocabIndex:

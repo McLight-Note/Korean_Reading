@@ -1,0 +1,8 @@
+# Local development, ingestion and tests:  pip install -r requirements-dev.txt
+-r requirements.txt
+uvicorn[standard]
+python-multipart
+python-docx
+pypdf
+pytest
+httpx

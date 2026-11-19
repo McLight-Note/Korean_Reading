@@ -1,10 +1,12 @@
 import json
 
 from fastapi import APIRouter, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel
 
 from .. import db
-from ..deps import Conn
+from ..deps import Conn, clamp_page
 from ..services import grammar_matcher
 from ..services.korean_analyzer import analyze_text
 from ..services.pattern_compiler import compile_pattern, pattern_key
@@ -23,7 +25,7 @@ class GrammarIn(BaseModel):
     level: str | None = None
     unit: int | None = None
     page: int | None = None
-    status: str | None = None
+    status: Literal['verified', 'needs_review', 'manual'] | None = None
     example: str | None = None
 
 
@@ -51,7 +53,7 @@ def list_grammar(q: str = "", level: str = "", status: str = "", compiled: str =
         where.append("rule_json IS NOT NULL" if compiled == "yes" else "rule_json IS NULL")
     w = ("WHERE " + " AND ".join(where)) if where else ""
     total = conn.execute(f"SELECT COUNT(*) FROM grammar_item {w}", vals).fetchone()[0]
-    rows = conn.execute(f"SELECT * FROM grammar_item {w} ORDER BY level, CAST(entry_no AS REAL), id LIMIT ? OFFSET ?", (*vals, min(limit, 500), offset)).fetchall()
+    rows = conn.execute(f"SELECT * FROM grammar_item {w} ORDER BY level, CAST(entry_no AS REAL), id LIMIT ? OFFSET ?", (*vals, *clamp_page(limit, offset, 500))).fetchall()
     return {"total": total, "items": [_public(r) for r in rows]}
 
 
@@ -62,6 +64,8 @@ def get_grammar(gid: int, conn=Conn):
         raise HTTPException(404)
     d = _public(r)
     d["examples"] = [dict(x) for x in conn.execute("SELECT id, sentence, source_ref FROM grammar_example WHERE grammar_id=?", (gid,))]
+    d["workbook"] = [dict(x) for x in conn.execute(
+        "SELECT id, level, section, exercise_no, instruction, body, pdf_page, printed_page FROM workbook_item WHERE grammar_id=? ORDER BY pdf_page, id LIMIT 40", (gid,))]
     return d
 
 

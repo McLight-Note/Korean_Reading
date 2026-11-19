@@ -1,4 +1,6 @@
 from fastapi import APIRouter
+from typing import Literal
+
 from pydantic import BaseModel
 
 from ..deps import Conn
@@ -7,7 +9,7 @@ router = APIRouter(prefix="/api")
 
 
 class SaveIn(BaseModel):
-    kind: str
+    kind: Literal['vocab', 'grammar']
     ref_id: int
     passage_id: int | None = None
     sentence: str | None = None
@@ -24,6 +26,7 @@ def overview(conn=Conn):
         "grammar_detectable": q("SELECT COUNT(*) FROM grammar_item WHERE rule_json IS NOT NULL"),
         "grammar_needs_review": q("SELECT COUNT(*) FROM grammar_item WHERE status='needs_review'"),
         "grammar_with_explanation": q("SELECT COUNT(*) FROM grammar_item WHERE explanation_original IS NOT NULL AND explanation_original<>''"),
+        "workbook_items": q("SELECT COUNT(*) FROM workbook_item"),
         "passages": q("SELECT COUNT(*) FROM passage"),
         "saved": q("SELECT COUNT(*) FROM saved_item"),
         "sources": [dict(r) for r in conn.execute("SELECT filename, kind, level, imported_at FROM source")],

@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel
 
 from .. import db
-from ..deps import Conn
+from ..deps import Conn, clamp_page
 from ..services.korean_analyzer import coarse_pos, headword_lemma_keys
 
 router = APIRouter(prefix="/api")
@@ -16,7 +18,7 @@ class VocabIn(BaseModel):
     pos: str | None = None
     level: str | None = None
     unit: int | None = None
-    status: str | None = None
+    status: Literal['verified', 'needs_review', 'manual'] | None = None
     example: str | None = None
 
 
@@ -37,7 +39,7 @@ def list_vocab(q: str = "", level: str = "", status: str = "", limit: int = 50, 
         where.append("status=?"); vals.append(status)
     w = ("WHERE " + " AND ".join(where)) if where else ""
     total = conn.execute(f"SELECT COUNT(*) FROM vocab_entry {w}", vals).fetchone()[0]
-    rows = conn.execute(f"SELECT * FROM vocab_entry {w} ORDER BY level, unit, id LIMIT ? OFFSET ?", (*vals, min(limit, 200), offset)).fetchall()
+    rows = conn.execute(f"SELECT * FROM vocab_entry {w} ORDER BY level, unit, id LIMIT ? OFFSET ?", (*vals, *clamp_page(limit, offset, 200))).fetchall()
     return {"total": total, "items": [dict(r) for r in rows]}
 
 

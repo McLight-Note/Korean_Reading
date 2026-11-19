@@ -1,8 +1,11 @@
 import json
 
 from fastapi import APIRouter, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel
 
+from .. import config
 from ..deps import Conn
 from ..services import sentence_analyzer as sa
 
@@ -16,9 +19,24 @@ class PassageIn(BaseModel):
 
 class OverrideIn(BaseModel):
     ref_id: int | None = None
-    status: str | None = None
-    match_type: str | None = None
+    status: Literal['VERIFIED', 'LIKELY', 'NEEDS_REVIEW', 'NOT_FOUND'] | None = None
+    match_type: Literal['EXACT', 'CONJUGATED', 'RELATED', 'NONE'] | None = None
     note: str | None = None
+
+
+@router.get("/config")
+def app_config():
+    return {"read_only": config.READ_ONLY, "max_chars": config.MAX_ANALYZE_CHARS if config.READ_ONLY else None}
+
+
+@router.post("/analyze")
+def analyze_only(body: PassageIn, conn=Conn):
+    """Stateless analysis: nothing is stored. Used by the read-only deployment (the browser keeps the result)."""
+    if not body.text.strip():
+        raise HTTPException(400, "Passage text is empty")
+    if config.READ_ONLY and len(body.text) > config.MAX_ANALYZE_CHARS:
+        raise HTTPException(413, f"Passage too long for the public demo (max {config.MAX_ANALYZE_CHARS} characters)")
+    return sa.analyze_ephemeral(conn, body.title, body.text)
 
 
 @router.get("/passages")

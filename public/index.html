@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Korean Reading</title>
-<link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <header class="top">
@@ -13,13 +13,17 @@
     <button data-tab="reader" class="on">Reader</button>
     <button data-tab="vocab">Vocabulary</button>
     <button data-tab="grammar">Grammar</button>
+    <button data-tab="study">Study</button>
+    <button data-tab="workbook">Workbook</button>
     <button data-tab="review">Review</button>
     <button data-tab="saved">Saved</button>
     <button data-tab="status">Status</button>
   </nav>
 </header>
 
+<div id="err-banner" class="banner err" role="alert" hidden onclick="this.hidden = true"></div>
 <main>
+<div id="ro-banner" class="banner" hidden>Public read-only edition. Your passages and saved words stay in <b>this browser only</b> — nothing is stored on a server. Grammar from unreviewed scans is labelled “possible match”.</div>
 <!-- READER -->
 <section id="tab-reader" class="tab">
   <aside class="side">
@@ -38,12 +42,18 @@
       <label><input type="checkbox" id="t-grammar" checked> Grammar</label>
       <label><input type="checkbox" id="t-vocab" checked> Vocabulary</label>
       <label title="Connective/modifier endings that match nothing in the textbook"><input type="checkbox" id="t-unmatched"> Unmatched endings</label>
+      <button id="btn-read" hidden>Mark as read</button>
       <button id="btn-edit" hidden>Edit text</button>
       <button id="btn-reanalyze" hidden>Re-analyze</button>
       <button id="btn-delete" hidden>Delete</button>
     </div>
     <div id="stale" class="banner" hidden>The textbook database changed since this passage was analysed. Re-analyze to refresh matches.</div>
     <div id="text" class="text" lang="ko"></div>
+    <section id="questions" class="qbox" hidden>
+      <h3>Comprehension questions <small class="muted">(written by you; none are generated)</small></h3>
+      <ul id="q-list" class="plain"></ul>
+      <div class="qform"><input id="q-text" placeholder="Question…"><input id="q-ans" placeholder="Answer (optional)"><button id="q-add">Add</button></div>
+    </section>
     <div class="legend">
       <span class="chip s-VERIFIED">verified</span><span class="chip s-LIKELY">likely</span>
       <span class="chip s-NEEDS_REVIEW">needs review</span><span class="chip s-NOT_FOUND">not found</span>
@@ -59,7 +69,7 @@
     <input id="v-q" placeholder="Search Korean / Uzbek / English">
     <select id="v-level"><option value="">All levels</option></select>
     <select id="v-status"><option value="">Any status</option><option>verified</option><option>needs_review</option><option>manual</option></select>
-    <button id="v-add">+ Add word</button>
+    <button id="v-add" class="edit-only">+ Add word</button>
   </div>
   <table class="grid" id="v-table"><thead><tr><th>Korean</th><th>POS*</th><th>Uzbek (textbook)</th><th>English (manual)</th><th>Level</th><th>Unit</th><th>Page†</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
   <div class="pager"><button id="v-prev">‹</button> <span id="v-info"></span> <button id="v-next">›</button></div>
@@ -73,10 +83,28 @@
     <select id="g-level"><option value="">All levels</option></select>
     <select id="g-status"><option value="">Any status</option><option>verified</option><option>needs_review</option><option>manual</option></select>
     <select id="g-compiled"><option value="">Detectable: any</option><option value="yes">Detectable</option><option value="no">Not detectable</option></select>
-    <button id="g-add">+ Add grammar</button>
+    <button id="g-add" class="edit-only">+ Add grammar</button>
   </div>
   <table class="grid" id="g-table"><thead><tr><th>Level</th><th>#</th><th>Pattern</th><th>Uzbek gloss (textbook)</th><th>Explanation</th><th>Detect</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
   <div class="pager"><button id="g-prev">‹</button> <span id="g-info"></span> <button id="g-next">›</button></div>
+</section>
+
+<!-- STUDY -->
+<section id="tab-study" class="tab" hidden>
+  <div class="filters" id="st-nav"><button data-v="home" class="on">Overview</button><button data-v="cards">Flashcards</button><button data-v="ex">Exercises</button><button data-v="wb">Workbook practice</button></div>
+  <div id="st-body"></div>
+</section>
+
+<!-- WORKBOOK -->
+<section id="tab-workbook" class="tab" hidden>
+  <div class="filters">
+    <select id="w-level"><option value="">All levels</option></select>
+    <select id="w-section"><option value="">All sections</option></select>
+    <input id="w-q" placeholder="Search exercise text / grammar heading">
+  </div>
+  <p class="muted">Workbook exercises exactly as OCR'd (unreviewed): blanks and answers are not filled in. Grammar exercises are linked to the matching grammar item where the heading matched.</p>
+  <div id="w-list"></div>
+  <div class="pager"><button id="w-prev">‹</button> <span id="w-info"></span> <button id="w-next">›</button></div>
 </section>
 
 <!-- REVIEW -->
@@ -104,6 +132,7 @@
 </main>
 
 <dialog id="dlg"><form method="dialog" id="dlg-form"></form></dialog>
-<script src="/static/app.js"></script>
+<script src="/app.js"></script>
+<script src="/study.js"></script>
 </body>
 </html>

@@ -140,7 +140,11 @@ def main(argv=None) -> int:
     pdf = Path(args.pdf)
     level = args.level or pdf.name.split()[0].upper()
     ocr_dir = config.DATA_DIR / "ocr" / pdf.stem.replace(" ", "_")
+    if not ocr_dir.is_dir() or not any(ocr_dir.glob("page_*.json")):
+        raise SystemExit(f"no OCR output in {ocr_dir}: run vision_ocr.swift on the PDF first (see README)")
     items = parse_ocr_dir(ocr_dir)
+    if not items:
+        raise SystemExit(f"nothing could be parsed from {ocr_dir}; nothing was imported")
     sha = hashlib.sha256(pdf.read_bytes()).hexdigest() if pdf.exists() else None
     with db.session() as conn:
         stats = store(conn, pdf.name, level, ocr_dir, items, sha, args.force)

@@ -2,17 +2,19 @@
 import json
 
 from fastapi import APIRouter, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel
 
 from .. import db
-from ..deps import Conn
+from ..deps import Conn, clamp_page
 from ..services import calibration
 
 router = APIRouter(prefix="/api/admin")
 
 
 class ApproveIn(BaseModel):
-    kind: str                      # 'grammar' | 'vocab'
+    kind: Literal['grammar', 'vocab']
     ids: list[int] | None = None
     level: str | None = None       # bulk: every needs_review item of this level (optionally with an explanation)
     source_id: int | None = None
@@ -61,7 +63,7 @@ def queue(kind: str = "grammar", status: str = "needs_review", level: str = "", 
     cols = "id, pattern AS label, level, unit, page, status, entry_no, meaning_uz, (explanation_original IS NOT NULL) AS has_expl, (rule_json IS NOT NULL) AS has_rule" if kind == "grammar" \
         else "id, headword AS label, level, unit, status, meaning_uz, pdf_page"
     order = "level, CAST(entry_no AS REAL), id" if kind == "grammar" else "level, unit, id"
-    rows = conn.execute(f"SELECT {cols} FROM {table} {w} ORDER BY {order} LIMIT ? OFFSET ?", (*vals, min(limit, 200), offset)).fetchall()
+    rows = conn.execute(f"SELECT {cols} FROM {table} {w} ORDER BY {order} LIMIT ? OFFSET ?", (*vals, *clamp_page(limit, offset, 200))).fetchall()
     return {"total": total, "items": [dict(r) for r in rows]}
 
 
