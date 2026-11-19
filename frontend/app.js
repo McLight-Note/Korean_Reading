@@ -85,7 +85,7 @@ function renderText() {
     const longest = arr => arr.slice().sort((x, y) => (y.end - y.start) - (x.end - x.start))[0];
     const cls = [];
     if (g.length) cls.push("gs-" + longest(g).status);
-    if (v.length) cls.push("vs-" + longest(v.filter(x => x.status !== "NOT_FOUND").concat(v))[0 + 0].status);
+    if (v.length) { const found = v.filter(x => x.status !== "NOT_FOUND"); cls.push("vs-" + longest(found.length ? found : v).status); }
     if (sent && a >= sent.start && b <= sent.end) cls.push("sent-on");
     if (sel && a >= sel.start && b <= sel.end) cls.push("sel");
     const attrs = (g.length ? ` data-g="${g.map(x => x.id)}"` : "") + (v.length ? ` data-v="${v.map(x => x.id)}"` : "") + (u.length ? ` data-u="${u.map(x => x.id)}"` : "");
