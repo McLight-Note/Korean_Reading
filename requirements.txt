@@ -1,0 +1,9 @@
+# Local-only stack. No external AI / network SDKs by design (see tests/test_no_external_ai.py).
+fastapi
+uvicorn[standard]
+python-multipart
+kiwipiepy
+python-docx
+pypdf
+pytest
+httpx

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Korean Reading</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="top">
+  <h1>서울대 Reader <small>textbook-based · local · no external AI</small></h1>
+  <nav id="tabs">
+    <button data-tab="reader" class="on">Reader</button>
+    <button data-tab="vocab">Vocabulary</button>
+    <button data-tab="grammar">Grammar</button>
+    <button data-tab="saved">Saved</button>
+    <button data-tab="status">Status</button>
+  </nav>
+</header>
+
+<main>
+<!-- READER -->
+<section id="tab-reader" class="tab">
+  <aside class="side">
+    <h2>Passages</h2>
+    <ul id="passage-list" class="plain"></ul>
+    <h2>New passage</h2>
+    <input id="new-title" placeholder="Title (optional)">
+    <textarea id="new-text" rows="8" placeholder="Paste a Korean passage…"></textarea>
+    <button id="btn-analyze" class="primary">Analyze with Kiwi</button>
+    <p class="muted" id="analyze-msg"></p>
+  </aside>
+  <article class="reader">
+    <div class="toolbar">
+      <strong id="p-title">Select or paste a passage</strong>
+      <span class="spacer"></span>
+      <label><input type="checkbox" id="t-grammar" checked> Grammar</label>
+      <label><input type="checkbox" id="t-vocab" checked> Vocabulary</label>
+      <label title="Connective/modifier endings that match nothing in the textbook"><input type="checkbox" id="t-unmatched"> Unmatched endings</label>
+      <button id="btn-edit" hidden>Edit text</button>
+      <button id="btn-reanalyze" hidden>Re-analyze</button>
+      <button id="btn-delete" hidden>Delete</button>
+    </div>
+    <div id="stale" class="banner" hidden>The textbook database changed since this passage was analysed. Re-analyze to refresh matches.</div>
+    <div id="text" class="text" lang="ko"></div>
+    <div class="legend">
+      <span class="chip s-VERIFIED">verified</span><span class="chip s-LIKELY">likely</span>
+      <span class="chip s-NEEDS_REVIEW">needs review</span><span class="chip s-NOT_FOUND">not found</span>
+      <span class="muted">Shaded = grammar · underlined = vocabulary</span>
+    </div>
+  </article>
+  <aside class="detail" id="detail"><p class="muted">Click a highlighted word or grammar structure.</p></aside>
+</section>
+
+<!-- VOCAB -->
+<section id="tab-vocab" class="tab" hidden>
+  <div class="filters">
+    <input id="v-q" placeholder="Search Korean / Uzbek / English">
+    <select id="v-level"><option value="">All levels</option></select>
+    <select id="v-status"><option value="">Any status</option><option>verified</option><option>needs_review</option><option>manual</option></select>
+    <button id="v-add">+ Add word</button>
+  </div>
+  <table class="grid" id="v-table"><thead><tr><th>Korean</th><th>POS*</th><th>Uzbek (textbook)</th><th>English (manual)</th><th>Level</th><th>Unit</th><th>Page†</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+  <div class="pager"><button id="v-prev">‹</button> <span id="v-info"></span> <button id="v-next">›</button></div>
+  <p class="muted">* part of speech is guessed by Kiwi, not from the book. † glossary PDF page.</p>
+</section>
+
+<!-- GRAMMAR -->
+<section id="tab-grammar" class="tab" hidden>
+  <div class="filters">
+    <input id="g-q" placeholder="Search pattern / gloss">
+    <select id="g-level"><option value="">All levels</option></select>
+    <select id="g-status"><option value="">Any status</option><option>verified</option><option>needs_review</option><option>manual</option></select>
+    <select id="g-compiled"><option value="">Detectable: any</option><option value="yes">Detectable</option><option value="no">Not detectable</option></select>
+    <button id="g-add">+ Add grammar</button>
+  </div>
+  <table class="grid" id="g-table"><thead><tr><th>Level</th><th>#</th><th>Pattern</th><th>Uzbek gloss (textbook)</th><th>Explanation</th><th>Detect</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+  <div class="pager"><button id="g-prev">‹</button> <span id="g-info"></span> <button id="g-next">›</button></div>
+</section>
+
+<!-- SAVED -->
+<section id="tab-saved" class="tab" hidden><table class="grid" id="s-table"><thead><tr><th>Type</th><th>Item</th><th>Uzbek</th><th>English</th><th>Level</th><th>Context</th><th></th></tr></thead><tbody></tbody></table></section>
+
+<!-- STATUS -->
+<section id="tab-status" class="tab" hidden><div id="status-body"></div></section>
+</main>
+
+<dialog id="dlg"><form method="dialog" id="dlg-form"></form></dialog>
+<script src="/static/app.js"></script>
+</body>
+</html>
