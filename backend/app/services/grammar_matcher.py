@@ -72,15 +72,22 @@ def _run_word(word: dict, sent: Sentence, mi: int) -> list[int]:
     if mi >= n:
         return []
     if word["kind"] == "lex":
+        out = []
         seq = word["morphs"]
-        if mi + len(seq) > n:
-            return []
-        for k, (form, tcls) in enumerate(seq):
-            m = ms[mi + k]
-            mc = "EP" if m.tag == "EP" else tag_class(m.tag)
-            if canon(m.form) != form or mc != tcls:
-                return []
-        return [mi + len(seq)]
+        if mi + len(seq) <= n and all(canon(ms[mi + k].form) == f and ("EP" if ms[mi + k].tag == "EP" else tag_class(ms[mi + k].tag)) == c
+                                      for k, (f, c) in enumerate(seq)):
+            out.append(mi + len(seq))                        # morpheme-for-morpheme match (handles 모르+았 for 몰랐다)
+        stem = word.get("stem")
+        if stem:                                             # Kiwi may split a dictionary word differently: 척+하, 만+하
+            for L in range(1, MAX_RUN + 1):
+                if mi + L > n:
+                    break
+                run = ms[mi:mi + L]
+                if any(m.tag.startswith("S") for m in run):
+                    break
+                if tag_class(run[-1].tag) == "V" and canon("".join(m.form for m in run)) == stem:
+                    out.append(mi + L)                       # last morpheme verb-like: 말/VX yes, 말/NNG (speech) no
+        return sorted(set(out))
     out = []
     for L in range(1, MAX_RUN + 1):
         if mi + L > n:
@@ -120,7 +127,7 @@ def _match_alt(alt: dict, sent: Sentence, start_mi: int):
         nxt = []
         for p in pos:
             starts = [p]
-            if wi > 0 and p < len(ms) and ms[p].tag == "JX":      # 수(도) 있다, 갈 수(는) 없다
+            if wi > 0 and p < len(ms) and ms[p].tag in ("JX", "MAG"):   # 수(도) 있다, 갈 수(는) 없다, 제대하려면 (아직) 멀었다
                 starts.append(p + 1)
             for s in starts:
                 nxt.extend(_run_word(word, sent, s))

@@ -27,7 +27,7 @@ const badge = (m, text) => `<span class="chip s-${m.status}">${h(text)}</span>`;
 $$("#tabs button").forEach(b => b.onclick = () => {
   $$("#tabs button").forEach(x => x.classList.toggle("on", x === b));
   $$(".tab").forEach(t => t.hidden = t.id !== "tab-" + b.dataset.tab);
-  ({ vocab: loadVocab, grammar: loadGrammar, saved: loadSaved, status: loadStatus }[b.dataset.tab] || (() => { }))();
+  ({ vocab: loadVocab, grammar: loadGrammar, review: loadReview, saved: loadSaved, status: loadStatus }[b.dataset.tab] || (() => { }))();
 });
 
 /* ---------- reader ---------- */
@@ -47,7 +47,70 @@ async function openPassage(id) {
   $("#stale").hidden = !cur.stale;
   renderText();
   $("#detail").innerHTML = `<p class="muted">Click a highlighted word or grammar structure.</p>`;
-  loadPassages();
+  /* ---------- review tab (manual correction of OCR'd textbook data) ---------- */
+let rPage = 0, rSel = null, rTimer;
+["#r-kind", "#r-level", "#r-status", "#r-expl", "#r-q"].forEach(s => $(s).oninput = () => { clearTimeout(rTimer); rTimer = setTimeout(() => { rPage = 0; loadReview(); }, 250); });
+$("#r-prev").onclick = () => { rPage = Math.max(0, rPage - 1); loadReview(); };
+$("#r-next").onclick = () => { rPage++; loadReview(); };
+async function loadReview() {
+  const lim = 60, kind = $("#r-kind").value;
+  $("#r-expl").hidden = kind !== "grammar"; $("#r-bulk").hidden = kind !== "grammar";
+  const r = await api(`/admin/queue?kind=${kind}&status=${$("#r-status").value}&level=${$("#r-level").value}&has_explanation=${$("#r-expl").value}&q=${encodeURIComponent($("#r-q").value)}&limit=${lim}&offset=${rPage * lim}`);
+  $("#r-list").innerHTML = r.items.map(i => `<li data-id="${i.id}" class="${rSel === i.id ? "on" : ""}"><span class="ko">${h(i.label)}</span><small>${h(i.level || "")}${i.unit ? " · u" + i.unit : ""}${i.page ? " · p" + i.page : ""} · ${h(i.status)}${kind === "grammar" ? (i.has_expl ? " · explained" : " · no explanation") + (i.has_rule ? "" : " · not detectable") : ""}</small></li>`).join("") || `<li class="muted">Nothing here.</li>`;
+  $("#r-info").textContent = `${Math.min(r.total, rPage * lim + 1)}–${Math.min(r.total, (rPage + 1) * lim)} of ${r.total}`;
+  $$("#r-list li[data-id]").forEach(li => li.onclick = () => openReview(+li.dataset.id));
+}
+$("#r-bulk").onclick = async () => {
+  const level = $("#r-level").value;
+  if (!level) return alert("Choose a level first.");
+  if (!confirm(`Mark every unreviewed ${level} grammar item that has a textbook explanation as VERIFIED? Only do this after checking a sample against the page images.`)) return;
+  const r = await api("/admin/approve", { method: "POST", body: { kind: "grammar", level, only_with_explanation: true } });
+  alert(`${r.approved} items approved. Re-analyze passages to refresh highlights.`); loadReview();
+};
+$("#r-calib").onclick = async () => {
+  const level = $("#r-level").value;
+  $("#r-detail").innerHTML = `<p class="muted">Running every textbook example through Kiwi + the matcher…</p>`;
+  const r = await api("/admin/calibration" + (level ? "?level=" + level : ""));
+  $("#r-detail").innerHTML = `<h3>Calibration${level ? " · " + level : ""}</h3><p>${r.totals.hits}/${r.totals.examples} textbook examples are detected by their own item's rule (recall ${Math.round((r.totals.recall || 0) * 100)}%) across ${r.totals.items} items. Low scores usually mean either a rule that needs fixing, or "examples" that really belong to a different pattern (comparison notes).</p>
+  <table class="grid"><thead><tr><th>Recall</th><th>Item</th><th>Level</th><th>Misses</th></tr></thead><tbody>${r.items.map(i => `<tr><td>${i.hits}/${i.examples}</td><td class="ko"><a href="#" data-g="${i.id}">${h(i.pattern)}</a></td><td>${h(i.level)}</td><td>${i.misses.slice(0, 2).map(m => h(m.sentence)).join("<br>")}</td></tr>`).join("")}</tbody></table>`;
+  $$("#r-detail a[data-g]").forEach(a => a.onclick = ev => { ev.preventDefault(); $("#r-kind").value = "grammar"; openReview(+a.dataset.g); });
+};
+async function openReview(id) {
+  rSel = id; $$("#r-list li").forEach(li => li.classList.toggle("on", +li.dataset.id === id));
+  const kind = $("#r-kind").value, box = $("#r-detail");
+  if (kind === "vocab") {
+    const d = await api("/admin/vocab/" + id), it = d.item;
+    box.innerHTML = `<h3>${h(it.headword)}</h3><p class="muted">${h(it.level)} · unit ${h(it.unit ?? "?")} · glossary PDF p.${h(it.pdf_page ?? "?")} · ${h(it.status)}</p>
+    <div class="rform"><label>Headword<input id="f-headword" value="${h(it.headword)}"></label><label>Uzbek (book)<input id="f-meaning_uz" value="${h(it.meaning_uz || "")}"></label>
+    <label>English<input id="f-meaning_en" value="${h(it.meaning_en || "")}"></label><label>Part of speech<input id="f-pos" value="${h(it.pos || "")}"></label></div>
+    <details><summary class="lbl">Original line(s)</summary><pre class="pre">${h(it.raw_text || "")}</pre></details>
+    <div class="row"><button id="rv-save" class="primary">Save &amp; approve</button> <button id="rv-del">Delete</button></div>`;
+    $("#rv-save").onclick = async () => { await api("/vocab/" + id, { method: "PATCH", body: { headword: $("#f-headword").value, meaning_uz: $("#f-meaning_uz").value, meaning_en: $("#f-meaning_en").value, pos: $("#f-pos").value, status: "verified" } }); loadReview(); box.innerHTML = `<p class="muted">Saved.</p>`; };
+    $("#rv-del").onclick = async () => { if (confirm("Delete this entry?")) { await api("/vocab/" + id, { method: "DELETE" }); loadReview(); box.innerHTML = ""; } };
+    return;
+  }
+  const d = await api("/admin/grammar/" + id), it = d.item;
+  const fld = (k, label, wide, area) => `<label class="${wide ? "wide" : ""}">${label}${area ? `<textarea id="f-${k}" rows="4">${h(it[k] || "")}</textarea>` : `<input id="f-${k}" value="${h(it[k] ?? "")}">`}</label>`;
+  const img = (pg, cap) => pg && pg.image_url ? `<figure><a href="${pg.image_url}" target="_blank"><img loading="lazy" src="${pg.image_url}" alt=""></a><figcaption>${h(cap)} (PDF p.${pg.pdf_page})</figcaption></figure>` : "";
+  box.innerHTML = `<h3>${h(it.pattern)}</h3><p class="muted">${h(it.level)} · unit ${h(it.unit ?? "?")} · book p.${h(it.page ?? "?")} · ${h(it.status)} · ${it.has_rule ? "auto-detectable" : "<b>not auto-detectable</b> (notation can't be compiled — fix the pattern)"}</p>
+  <div class="pages">${img(d.book_page, "Student book – Grammar Extension")}${img(d.index_page, "Scanned grammar index")}</div>
+  <div class="rform">${fld("pattern", "Pattern (V/A/N+ notation)", true)}${fld("meaning_uz", "Uzbek gloss (book)")}${fld("meaning_en", "English meaning")}${fld("level", "Level")}${fld("unit", "Unit")}${fld("page", "Book page")}
+  ${fld("explanation_original", "Original textbook explanation (verbatim)", true, true)}${fld("formation", "Formation (verbatim)", true, true)}${fld("notes", "Notes", true, true)}</div>
+  <div class="row"><b>Examples</b> <span class="muted">(only genuine examples of this pattern should stay)</span><div id="ex-list">${it.examples.map(e => `<div class="ex-row"><span>${h(e.sentence)}</span><button data-e="${e.id}">✕</button></div>`).join("") || `<div class="empty">none</div>`}</div>
+  <input id="ex-new" placeholder="Add example sentence…"><button id="ex-add">Add</button></div>
+  <details><summary class="lbl">Raw OCR text of the index entry</summary><pre class="pre">${h(it.raw_text || "")}</pre></details>
+  <div class="row"><button id="rg-save" class="primary">Save &amp; approve</button> <button id="rg-save-only">Save (keep needs_review)</button> <button id="rg-del">Delete</button>
+  <input id="mg-id" placeholder="merge into item #id" style="width:150px"><button id="mg-go">Merge</button></div><p id="rg-msg" class="muted"></p>`;
+  const body = approve => { const v = {}; for (const k of ["pattern", "meaning_uz", "meaning_en", "level", "unit", "page", "explanation_original", "formation", "notes"]) { const x = $("#f-" + k).value; v[k] = ["unit", "page"].includes(k) ? (x ? +x : null) : (x || null); } v.status = approve ? "verified" : "needs_review"; return v; };
+  const save = async approve => { const r = await api("/grammar/" + id, { method: "PATCH", body: body(approve) }); $("#rg-msg").textContent = "Saved." + (r.compiled === false ? " ⚠ notation still can't be compiled." : ""); loadReview(); };
+  $("#rg-save").onclick = () => save(true); $("#rg-save-only").onclick = () => save(false);
+  $("#rg-del").onclick = async () => { if (confirm("Delete this grammar item?")) { await api("/grammar/" + id, { method: "DELETE" }); loadReview(); box.innerHTML = `<p class="muted">Deleted.</p>`; } };
+  $("#mg-go").onclick = async () => { const to = +$("#mg-id").value; if (to && confirm(`Merge into #${to}? This item is deleted and its examples move over.`)) { await api("/admin/grammar/merge", { method: "POST", body: { from_id: id, into_id: to } }); loadReview(); openReview(to); } };
+  $("#ex-add").onclick = async () => { const t = $("#ex-new").value.trim(); if (t) { await api(`/admin/grammar/${id}/examples`, { method: "POST", body: { sentence: t } }); openReview(id); } };
+  $$("#ex-list button[data-e]").forEach(b => b.onclick = async () => { await api("/admin/grammar-examples/" + b.dataset.e, { method: "DELETE" }); openReview(id); });
+}
+
+loadPassages();
 }
 $("#btn-analyze").onclick = async () => {
   const text = $("#new-text").value;
@@ -139,7 +202,9 @@ function grammarPanel(m, it, d, sentHtml) {
   if (it.explanation_ko) s += `<div class="row"><span class="lbl">Korean explanation</span><blockquote>${h(it.explanation_ko)}</blockquote></div>`;
   s += `<div class="row"><span class="lbl">Meaning (Uzbek, from the book)</span><br>${h(it.meaning_uz || "—")}</div>`;
   s += `<div class="row"><span class="lbl">Meaning (English)</span><br>${it.meaning_en ? h(it.meaning_en) : `<span class="muted">not provided by the textbook</span>`}<br><input id="en-input" placeholder="Add English meaning…" value="${h(it.meaning_en || "")}"><button id="en-save">Save English</button></div>`;
-  s += `<div class="row"><span class="lbl">Textbook examples</span>${it.examples.length ? it.examples.map(e => `<blockquote>${h(e.sentence)}</blockquote>`).join("") : `<div class="empty">No examples stored for this item.</div>`}</div>`;
+  if (it.formation) s += `<details><summary class="lbl">Formation (from the book)</summary><pre class="pre">${h(it.formation)}</pre></details>`;
+  s += `<div class="row"><span class="lbl">Textbook examples</span>${it.examples.length ? it.examples.map(e => `<blockquote>${h(e.sentence)}<br><span class="muted">${h(e.source_ref || "")}</span></blockquote>`).join("") : `<div class="empty">No examples stored for this item.</div>`}</div>`;
+  if (it.notes) s += `<details><summary class="lbl">Notes &amp; comparisons (verbatim OCR)</summary><pre class="pre">${h(it.notes)}</pre></details>`;
   s += `<div class="row"><span class="lbl">In your passage</span><blockquote>${sentHtml}</blockquote></div>`;
   if (d.candidate_items.length) s += `<div class="row"><span class="lbl">Other textbook items matching this span</span>${d.candidate_items.map(c => `<div><b>${h(c.pattern)}</b> <span class="muted">${h(c.level || "")}</span> <button data-use="${c.id}">Use this</button></div>`).join("")}</div>`;
   s += `<div class="row"><button id="save-it" class="primary">Save grammar</button> ${it.status !== "verified" ? `<button id="approve">Mark item verified</button>` : ""}</div>`;
@@ -198,7 +263,7 @@ function formDialog(title, fields, onSave, extra) {
 
 /* ---------- vocabulary tab ---------- */
 let vPage = 0, gPage = 0;
-LEVELS.forEach(l => { $("#v-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); $("#g-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); });
+LEVELS.forEach(l => { $("#r-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); $("#v-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); $("#g-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); });
 let vTimer;
 ["#v-q", "#v-level", "#v-status"].forEach(s => $(s).oninput = () => { clearTimeout(vTimer); vTimer = setTimeout(() => { vPage = 0; loadVocab(); }, 250); });
 $("#v-prev").onclick = () => { vPage = Math.max(0, vPage - 1); loadVocab(); };
@@ -272,7 +337,70 @@ async function loadStatus() {
   <span>Grammar items</span><b>${o.grammar}</b><span>…auto-detectable (compiled rule)</span><b>${o.grammar_detectable}</b><span>…still unreviewed (scan/OCR)</span><b>${o.grammar_needs_review}</b>
   <span>…with an original textbook explanation</span><b>${o.grammar_with_explanation}</b><span>Passages</span><b>${o.passages}</b><span>Saved items</span><b>${o.saved}</b></div>
   <h2>Imported sources</h2><ul>${o.sources.map(s => `<li>${h(s.filename)} — ${h(s.kind)} (${h(s.level || "")})</li>`).join("")}</ul>
-  <p class="muted">Student books (3B, 4A, 4B) and workbooks are not imported yet, so grammar items have no original explanations or examples until they are OCR'd or added manually. Levels without a student book (1A–3A, 5A, 5B) will only ever have index entries + Uzbek glosses unless you add that material.</p>`;
+  <p class="muted">Original explanations and examples exist only where a student book was imported (3B, 4A, 4B — Grammar Extension sections). Levels 1A–3A, 5A and 5B have no student book here, so their grammar items carry only the pattern and Uzbek gloss from the scanned index until you add material. Workbooks are not imported yet. Everything OCR'd stays "needs_review" until you approve it in the Review tab.</p>`;
+}
+
+/* ---------- review tab (manual correction of OCR'd textbook data) ---------- */
+let rPage = 0, rSel = null, rTimer;
+["#r-kind", "#r-level", "#r-status", "#r-expl", "#r-q"].forEach(s => $(s).oninput = () => { clearTimeout(rTimer); rTimer = setTimeout(() => { rPage = 0; loadReview(); }, 250); });
+$("#r-prev").onclick = () => { rPage = Math.max(0, rPage - 1); loadReview(); };
+$("#r-next").onclick = () => { rPage++; loadReview(); };
+async function loadReview() {
+  const lim = 60, kind = $("#r-kind").value;
+  $("#r-expl").hidden = kind !== "grammar"; $("#r-bulk").hidden = kind !== "grammar";
+  const r = await api(`/admin/queue?kind=${kind}&status=${$("#r-status").value}&level=${$("#r-level").value}&has_explanation=${$("#r-expl").value}&q=${encodeURIComponent($("#r-q").value)}&limit=${lim}&offset=${rPage * lim}`);
+  $("#r-list").innerHTML = r.items.map(i => `<li data-id="${i.id}" class="${rSel === i.id ? "on" : ""}"><span class="ko">${h(i.label)}</span><small>${h(i.level || "")}${i.unit ? " · u" + i.unit : ""}${i.page ? " · p" + i.page : ""} · ${h(i.status)}${kind === "grammar" ? (i.has_expl ? " · explained" : " · no explanation") + (i.has_rule ? "" : " · not detectable") : ""}</small></li>`).join("") || `<li class="muted">Nothing here.</li>`;
+  $("#r-info").textContent = `${Math.min(r.total, rPage * lim + 1)}–${Math.min(r.total, (rPage + 1) * lim)} of ${r.total}`;
+  $$("#r-list li[data-id]").forEach(li => li.onclick = () => openReview(+li.dataset.id));
+}
+$("#r-bulk").onclick = async () => {
+  const level = $("#r-level").value;
+  if (!level) return alert("Choose a level first.");
+  if (!confirm(`Mark every unreviewed ${level} grammar item that has a textbook explanation as VERIFIED? Only do this after checking a sample against the page images.`)) return;
+  const r = await api("/admin/approve", { method: "POST", body: { kind: "grammar", level, only_with_explanation: true } });
+  alert(`${r.approved} items approved. Re-analyze passages to refresh highlights.`); loadReview();
+};
+$("#r-calib").onclick = async () => {
+  const level = $("#r-level").value;
+  $("#r-detail").innerHTML = `<p class="muted">Running every textbook example through Kiwi + the matcher…</p>`;
+  const r = await api("/admin/calibration" + (level ? "?level=" + level : ""));
+  $("#r-detail").innerHTML = `<h3>Calibration${level ? " · " + level : ""}</h3><p>${r.totals.hits}/${r.totals.examples} textbook examples are detected by their own item's rule (recall ${Math.round((r.totals.recall || 0) * 100)}%) across ${r.totals.items} items. Low scores usually mean either a rule that needs fixing, or "examples" that really belong to a different pattern (comparison notes).</p>
+  <table class="grid"><thead><tr><th>Recall</th><th>Item</th><th>Level</th><th>Misses</th></tr></thead><tbody>${r.items.map(i => `<tr><td>${i.hits}/${i.examples}</td><td class="ko"><a href="#" data-g="${i.id}">${h(i.pattern)}</a></td><td>${h(i.level)}</td><td>${i.misses.slice(0, 2).map(m => h(m.sentence)).join("<br>")}</td></tr>`).join("")}</tbody></table>`;
+  $$("#r-detail a[data-g]").forEach(a => a.onclick = ev => { ev.preventDefault(); $("#r-kind").value = "grammar"; openReview(+a.dataset.g); });
+};
+async function openReview(id) {
+  rSel = id; $$("#r-list li").forEach(li => li.classList.toggle("on", +li.dataset.id === id));
+  const kind = $("#r-kind").value, box = $("#r-detail");
+  if (kind === "vocab") {
+    const d = await api("/admin/vocab/" + id), it = d.item;
+    box.innerHTML = `<h3>${h(it.headword)}</h3><p class="muted">${h(it.level)} · unit ${h(it.unit ?? "?")} · glossary PDF p.${h(it.pdf_page ?? "?")} · ${h(it.status)}</p>
+    <div class="rform"><label>Headword<input id="f-headword" value="${h(it.headword)}"></label><label>Uzbek (book)<input id="f-meaning_uz" value="${h(it.meaning_uz || "")}"></label>
+    <label>English<input id="f-meaning_en" value="${h(it.meaning_en || "")}"></label><label>Part of speech<input id="f-pos" value="${h(it.pos || "")}"></label></div>
+    <details><summary class="lbl">Original line(s)</summary><pre class="pre">${h(it.raw_text || "")}</pre></details>
+    <div class="row"><button id="rv-save" class="primary">Save &amp; approve</button> <button id="rv-del">Delete</button></div>`;
+    $("#rv-save").onclick = async () => { await api("/vocab/" + id, { method: "PATCH", body: { headword: $("#f-headword").value, meaning_uz: $("#f-meaning_uz").value, meaning_en: $("#f-meaning_en").value, pos: $("#f-pos").value, status: "verified" } }); loadReview(); box.innerHTML = `<p class="muted">Saved.</p>`; };
+    $("#rv-del").onclick = async () => { if (confirm("Delete this entry?")) { await api("/vocab/" + id, { method: "DELETE" }); loadReview(); box.innerHTML = ""; } };
+    return;
+  }
+  const d = await api("/admin/grammar/" + id), it = d.item;
+  const fld = (k, label, wide, area) => `<label class="${wide ? "wide" : ""}">${label}${area ? `<textarea id="f-${k}" rows="4">${h(it[k] || "")}</textarea>` : `<input id="f-${k}" value="${h(it[k] ?? "")}">`}</label>`;
+  const img = (pg, cap) => pg && pg.image_url ? `<figure><a href="${pg.image_url}" target="_blank"><img loading="lazy" src="${pg.image_url}" alt=""></a><figcaption>${h(cap)} (PDF p.${pg.pdf_page})</figcaption></figure>` : "";
+  box.innerHTML = `<h3>${h(it.pattern)}</h3><p class="muted">${h(it.level)} · unit ${h(it.unit ?? "?")} · book p.${h(it.page ?? "?")} · ${h(it.status)} · ${it.has_rule ? "auto-detectable" : "<b>not auto-detectable</b> (notation can't be compiled — fix the pattern)"}</p>
+  <div class="pages">${img(d.book_page, "Student book – Grammar Extension")}${img(d.index_page, "Scanned grammar index")}</div>
+  <div class="rform">${fld("pattern", "Pattern (V/A/N+ notation)", true)}${fld("meaning_uz", "Uzbek gloss (book)")}${fld("meaning_en", "English meaning")}${fld("level", "Level")}${fld("unit", "Unit")}${fld("page", "Book page")}
+  ${fld("explanation_original", "Original textbook explanation (verbatim)", true, true)}${fld("formation", "Formation (verbatim)", true, true)}${fld("notes", "Notes", true, true)}</div>
+  <div class="row"><b>Examples</b> <span class="muted">(only genuine examples of this pattern should stay)</span><div id="ex-list">${it.examples.map(e => `<div class="ex-row"><span>${h(e.sentence)}</span><button data-e="${e.id}">✕</button></div>`).join("") || `<div class="empty">none</div>`}</div>
+  <input id="ex-new" placeholder="Add example sentence…"><button id="ex-add">Add</button></div>
+  <details><summary class="lbl">Raw OCR text of the index entry</summary><pre class="pre">${h(it.raw_text || "")}</pre></details>
+  <div class="row"><button id="rg-save" class="primary">Save &amp; approve</button> <button id="rg-save-only">Save (keep needs_review)</button> <button id="rg-del">Delete</button>
+  <input id="mg-id" placeholder="merge into item #id" style="width:150px"><button id="mg-go">Merge</button></div><p id="rg-msg" class="muted"></p>`;
+  const body = approve => { const v = {}; for (const k of ["pattern", "meaning_uz", "meaning_en", "level", "unit", "page", "explanation_original", "formation", "notes"]) { const x = $("#f-" + k).value; v[k] = ["unit", "page"].includes(k) ? (x ? +x : null) : (x || null); } v.status = approve ? "verified" : "needs_review"; return v; };
+  const save = async approve => { const r = await api("/grammar/" + id, { method: "PATCH", body: body(approve) }); $("#rg-msg").textContent = "Saved." + (r.compiled === false ? " ⚠ notation still can't be compiled." : ""); loadReview(); };
+  $("#rg-save").onclick = () => save(true); $("#rg-save-only").onclick = () => save(false);
+  $("#rg-del").onclick = async () => { if (confirm("Delete this grammar item?")) { await api("/grammar/" + id, { method: "DELETE" }); loadReview(); box.innerHTML = `<p class="muted">Deleted.</p>`; } };
+  $("#mg-go").onclick = async () => { const to = +$("#mg-id").value; if (to && confirm(`Merge into #${to}? This item is deleted and its examples move over.`)) { await api("/admin/grammar/merge", { method: "POST", body: { from_id: id, into_id: to } }); loadReview(); openReview(to); } };
+  $("#ex-add").onclick = async () => { const t = $("#ex-new").value.trim(); if (t) { await api(`/admin/grammar/${id}/examples`, { method: "POST", body: { sentence: t } }); openReview(id); } };
+  $$("#ex-list button[data-e]").forEach(b => b.onclick = async () => { await api("/admin/grammar-examples/" + b.dataset.e, { method: "DELETE" }); openReview(id); });
 }
 
 loadPassages();

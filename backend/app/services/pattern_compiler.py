@@ -98,6 +98,8 @@ def word_forms(word: str) -> list[str]:
     for alt in _slash_alternatives(word):
         for e in _expand_optional(alt):
             f = canon(merge_jamo(e.strip("-~")))
+            if f and not re.fullmatch(r"[가-힣\u1100-\u11FF\u3131-\u318E]+", f):
+                return []                       # digits/Latin/punctuation => OCR junk: refuse to build a rule
             if f and f not in forms:
                 forms.append(f)
     return forms
@@ -124,7 +126,8 @@ def compile_word(word: str):
         morphs = _probe_lexical(re.sub(r"[()]", "", word))
         if morphs is None:
             return None
-        return {"kind": "lex", "morphs": morphs}
+        stem = canon(re.sub(r"[()]", "", word)[:-1])          # dictionary form minus 다: matched across morpheme boundaries
+        return {"kind": "lex", "morphs": morphs, "stem": stem}
     forms = word_forms(word)
     if not forms:
         return None

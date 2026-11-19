@@ -13,6 +13,7 @@
     <button data-tab="reader" class="on">Reader</button>
     <button data-tab="vocab">Vocabulary</button>
     <button data-tab="grammar">Grammar</button>
+    <button data-tab="review">Review</button>
     <button data-tab="saved">Saved</button>
     <button data-tab="status">Status</button>
   </nav>
@@ -76,6 +77,23 @@
   </div>
   <table class="grid" id="g-table"><thead><tr><th>Level</th><th>#</th><th>Pattern</th><th>Uzbek gloss (textbook)</th><th>Explanation</th><th>Detect</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
   <div class="pager"><button id="g-prev">‹</button> <span id="g-info"></span> <button id="g-next">›</button></div>
+</section>
+
+<!-- REVIEW -->
+<section id="tab-review" class="tab" hidden>
+  <div class="filters">
+    <select id="r-kind"><option value="grammar">Grammar</option><option value="vocab">Vocabulary</option></select>
+    <select id="r-level"><option value="">All levels</option></select>
+    <select id="r-status"><option value="needs_review">needs_review</option><option value="">any status</option><option value="verified">verified</option><option value="manual">manual</option></select>
+    <select id="r-expl"><option value="">Explanation: any</option><option value="yes">has explanation</option><option value="no">no explanation</option></select>
+    <input id="r-q" placeholder="Search">
+    <button id="r-bulk" title="Marks every listed level's unreviewed items that have a textbook explanation as verified">Approve level (with explanation)</button>
+    <button id="r-calib">Calibration report</button>
+  </div>
+  <div class="review">
+    <div><ul id="r-list" class="plain"></ul><div class="pager"><button id="r-prev">‹</button> <span id="r-info"></span> <button id="r-next">›</button></div></div>
+    <div id="r-detail"><p class="muted">Pick an item. Check it against the page image, fix it, then approve. Only approved items can be shown as VERIFIED in the reader.</p></div>
+  </div>
 </section>
 
 <!-- SAVED -->

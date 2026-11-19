@@ -76,7 +76,9 @@ CREATE TABLE IF NOT EXISTS grammar_item (
   corrected INTEGER NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   entry_no TEXT,
-  raw_text TEXT
+  raw_text TEXT,
+  notes TEXT,
+  index_page INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS grammar_example (

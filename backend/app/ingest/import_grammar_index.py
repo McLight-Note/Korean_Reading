@@ -33,7 +33,7 @@ def main(argv=None) -> int:
             print("already imported; use --force (manual corrections would be lost)")
             return 1
         if row:
-            conn.execute("DELETE FROM grammar_item WHERE source_id=?", (row["id"],))
+            conn.execute("DELETE FROM grammar_item WHERE corrected=0 AND (source_id=? OR entry_no IS NOT NULL)", (row["id"],))
             conn.execute("DELETE FROM source WHERE id=?", (row["id"],))
         sid = conn.execute("INSERT INTO source(filename, level, kind, sha256, note) VALUES (?,?,?,?,?)",
                            (pdf.name, "1A-4B", "grammar_index", hashlib.sha256(pdf.read_bytes()).hexdigest(),
@@ -43,10 +43,15 @@ def main(argv=None) -> int:
             rule = compile_pattern(it.pattern)
             ok += rule is not None
             conn.execute(
-                """INSERT INTO grammar_item(pattern, pattern_key, rule_json, meaning_uz, level, pdf_page, source_id,
-                       status, entry_no, raw_text) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                """INSERT INTO grammar_item(pattern, pattern_key, rule_json, meaning_uz, level, pdf_page, index_page, source_id,
+                       status, entry_no, raw_text) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (it.pattern, pattern_key(it.pattern), json.dumps(rule, ensure_ascii=False) if rule else None,
-                 it.gloss or None, it.level, it.pdf_page, sid, "needs_review", it.entry_no, it.raw))
+                 it.gloss or None, it.level, it.pdf_page, it.pdf_page, sid, "needs_review", it.entry_no, it.raw))
+        for jp in sorted(ocr_dir.glob("page_*.json")):          # raw pages + images for the review UI
+            d = json.loads(jp.read_text(encoding="utf-8"))
+            conn.execute("INSERT OR REPLACE INTO ocr_page(source_id, pdf_page, text, lines_json, image_path) VALUES (?,?,?,?,?)",
+                         (sid, d["pdf_page"], "\n".join(l["text"] for l in d["lines"]), json.dumps(d["lines"], ensure_ascii=False),
+                          f"{ocr_dir.name}/{jp.stem}.jpg"))
         db.bump(conn, "rules_version")
     print(f"imported {len(items)} grammar index items; {ok} compiled into detection rules")
     return 0

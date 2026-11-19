@@ -15,7 +15,7 @@ def connect(path=None) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(config.SCHEMA_PATH.read_text(encoding="utf-8"))
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(grammar_item)")}
-    for col in ("entry_no", "raw_text"):                      # migrate DBs created before these columns existed
+    for col in ("entry_no", "raw_text", "notes", "index_page"):                      # migrate DBs created before these columns existed
         if col not in cols:
             conn.execute(f"ALTER TABLE grammar_item ADD COLUMN {col} TEXT")
     conn.commit()

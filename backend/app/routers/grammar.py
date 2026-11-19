@@ -19,6 +19,7 @@ class GrammarIn(BaseModel):
     meaning_en: str | None = None
     meaning_uz: str | None = None
     formation: str | None = None
+    notes: str | None = None
     level: str | None = None
     unit: int | None = None
     page: int | None = None

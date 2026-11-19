@@ -132,3 +132,24 @@ def test_stale_flag_after_rules_change(conn):
     assert sa.load_analysis(conn, pid)["stale"] is False
     db.bump(conn, "rules_version")
     assert sa.load_analysis(conn, pid)["stale"] is True
+
+
+@pytest.mark.parametrize("pattern,sentence,span", [
+    ("V+고 말다", "결국 헤어지고 말았습니다.", "지고 말았습니다"),
+    ("A+(으)ㄴ/V+는 척하다", "아픈 척했어요", "아픈 척했어요"),
+    ("V+(으)려면 멀었다", "제대하려면 아직 멀었다", "려면 아직 멀었다"),
+])
+def test_lexical_tail_and_adverb_gap(conn, pattern, sentence, span):
+    add_grammar(conn, pattern)
+    g = [m for m in analyse(conn, sentence)["matches"] if m["layer"] == "grammar" and m["status"] != "NOT_FOUND"]
+    assert g and span in g[0]["surface"]
+
+
+def test_noun_homograph_is_not_a_verb_tail(conn):
+    add_grammar(conn, "V+고 말다")
+    g = [m for m in analyse(conn, "책을 읽고 말을 했어요.")["matches"] if m["layer"] == "grammar" and m["status"] != "NOT_FOUND"]
+    assert not g                                    # 말 (speech, NNG) is not the auxiliary 말다
+
+
+def test_junk_notation_never_becomes_a_rule():
+    assert compile_pattern("V+0/히/리/기/우-(사동)") is None
