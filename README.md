@@ -174,12 +174,6 @@ Adding stories to the database is done by a script on your Mac, not by the websi
 
 1. Firebase console → **gear icon → Project settings → Service accounts** tab.
 2. Click **Generate new private key**, confirm, and a `.json` file downloads.
-3. Move it into the project, under exactly this name:
-
-   ```bash
-   mkdir -p secrets
-   mv ~/Downloads/*firebase-adminsdk*.json secrets/firebase-service-account.json
-   ```
 
    If that `mv` command says "No such file", find the downloaded file in Finder and drag it into the `secrets` folder, then rename it `firebase-service-account.json`.
 
