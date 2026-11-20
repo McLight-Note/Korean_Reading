@@ -1,3 +1,2 @@
-# Runtime only: this file is what Vercel installs. No AI / network SDKs by design (see tests/test_no_external_ai.py).
+# Runtime only: this file is what Vercel installs. There is no NLP and no AI SDK (see tests/test_no_external_ai.py).
 fastapi
-kiwipiepy

@@ -16,7 +16,6 @@ import tempfile
 from pathlib import Path
 
 from .. import db
-from ..services.korean_analyzer import coarse_pos, headword_lemma_keys
 from .glossary_parser import parse_pages
 
 SWIFT = Path(__file__).with_name("pdf_text.swift")
@@ -34,16 +33,13 @@ def import_entries(conn, entries, source_id: int) -> int:
     for e in entries:
         if e.level is None:
             continue  # cover page etc.
-        status = "needs_review" if set(e.flags) - {"no-gloss"} or "no-gloss" in e.flags else "verified"
-        cur = conn.execute(
-            """INSERT INTO vocab_entry (headword, pos, pos_source, meaning_uz, level, unit, unit_title,
-                   pdf_page, source_id, entry_no, raw_text, status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (e.headword, coarse_pos(e.headword), "kiwi", e.gloss or None, e.level, e.unit, e.unit_title,
-             e.pdf_page, source_id, e.entry_no, "\n".join(e.raw), status),
+        # only the Korean headword, level, unit and page are kept: the book's Uzbek glosses are deliberately NOT stored
+        status = "needs_review" if set(e.flags) - {"no-gloss"} else "verified"
+        conn.execute(
+            """INSERT INTO vocab_entry (headword, level, unit, unit_title, pdf_page, source_id, entry_no, status)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (e.headword, e.level, e.unit, e.unit_title, e.pdf_page, source_id, e.entry_no, status),
         )
-        for k in headword_lemma_keys(e.headword):
-            conn.execute("INSERT INTO vocab_key(entry_id, key) VALUES (?,?)", (cur.lastrowid, k))
         n += 1
     db.bump(conn, "vocab_version")
     return n

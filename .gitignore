@@ -9,3 +9,11 @@ deploy/
 .vercel/
 .vercel
 .env*
+tests/firebase/node_modules/
+tests/firebase/package-lock.json
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+tests/e2e/node_modules/
+tests/e2e/package-lock.json
+tests/e2e/shots/

@@ -6,7 +6,6 @@ import pytest
 from backend.app import db
 from backend.app.ingest import import_student_book as isb
 from backend.app.ingest.sb_grammar_parser import book_to_notation, parse_ocr_dir
-from backend.app.services.pattern_compiler import compile_pattern
 
 
 def L(text, x, y, h=0.015):
@@ -44,7 +43,6 @@ def test_book_notation_conversion():
     disp, rule = book_to_notation("V-(으)ㄹ 생각[계획, 예정]이다")
     assert disp == "V+(으)ㄹ 생각[계획, 예정]이다"
     assert rule == "V+(으)ㄹ 생각이다/V+(으)ㄹ 계획이다/V+(으)ㄹ 예정이다"
-    assert compile_pattern(rule) is not None
     assert book_to_notation("A-다니까(요), V-ㄴ다니까(요)")[0] == "A+다니까(요)/V+ㄴ다니까(요)"
 
 
@@ -64,14 +62,14 @@ def test_import_joins_index_and_is_idempotent(tmp_path, ocr_dir):
     conn = db.connect(tmp_path / "t.sqlite")
     db.init_db(conn)
     src = conn.execute("INSERT INTO source(filename, kind) VALUES ('idx.pdf','grammar_index')").lastrowid
-    conn.execute("INSERT INTO grammar_item(pattern, level, source_id, status, entry_no, meaning_uz) VALUES ('V+고 말다','9Z',?,'needs_review','7','qilib qo''ymoq')", (src,))
+    conn.execute("INSERT INTO grammar_item(pattern, level, source_id, status, entry_no) VALUES ('V+고 말다','9Z',?,'needs_review','7')", (src,))
     conn.execute("INSERT INTO grammar_item(pattern, level, source_id, status, corrected, entry_no, explanation_original) VALUES ('A/V+던','9Z',?,'verified',1,'8','my own text')", (src,))
     conn.commit()
     items = parse_ocr_dir(ocr_dir)
     s1 = isb.store(conn, "X SB.pdf", "9Z", ocr_dir, items)
     assert (s1["joined"], s1["new"], s1["kept_corrected"]) == (1, 0, 1)
     row = conn.execute("SELECT * FROM grammar_item WHERE pattern='V+고 말다'").fetchone()
-    assert row["unit"] == 3 and row["page"] == 12 and row["status"] == "needs_review" and row["meaning_uz"] == "qilib qo'ymoq"
+    assert row["unit"] == 3 and row["page"] == 12 and row["status"] == "needs_review"
     assert row["explanation_original"].startswith("어떤 일이")
     # a manually corrected record is never overwritten
     assert conn.execute("SELECT explanation_original FROM grammar_item WHERE pattern='A/V+던'").fetchone()[0] == "my own text"

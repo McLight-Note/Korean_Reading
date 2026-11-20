@@ -1,7 +1,15 @@
 "use strict";
+/* App shell, reader, and the vocabulary / grammar / workbook / review / saved / status tabs.
+   Translation = translate.js (Google Translate in the browser). Storage = store.js. Study = study.js. Stories = stories.js. */
+
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const h = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const LEVELS = ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B", "5A", "5B"];
+const TRIM = /^[\s"'“”‘’.,!?…()\[\]:;~\-–—<>]+|[\s"'“”‘’.,!?…()\[\]:;~\-–—<>]+$/g;
+const isKorean = s => /[가-힣]/.test(s);
+let RO = false;                       // public deployment: no editing / review
+
 async function api(path, opts = {}) {
   const r = await fetch("/api" + path, { headers: { "Content-Type": "application/json" }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
   if (!r.ok) {
@@ -12,223 +20,242 @@ async function api(path, opts = {}) {
   return r.json();
 }
 function showError(msg) {
-  const b = document.getElementById("err-banner");
+  const b = $("#err-banner");
   if (!b) return;
   b.textContent = "Something went wrong: " + msg + "  (click to dismiss)";
   b.hidden = false;
 }
 window.addEventListener("unhandledrejection", ev => { showError((ev.reason && ev.reason.message) || String(ev.reason)); });
-/* Read-only (public) mode: the server keeps no per-user data. Passages and saved words live in this browser. */
-let RO = false;
-const LS = {
-  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
-};
-async function createLocal(title, text) {
-  const a = await api("/analyze", { method: "POST", body: { title, text } });
-  a.id = Date.now();
-  const all = LS.get("kr.passages", []); all.unshift(a);
-  if (!LS.set("kr.passages", all)) alert("Browser storage is full: this passage is shown but could not be saved. Delete old passages to free space.");
-  return a;
-}
-async function updateLocal(id, title, text) {
-  const a = await api("/analyze", { method: "POST", body: { title, text } });
-  a.id = id;
-  LS.set("kr.passages", LS.get("kr.passages", []).map(p => p.id === id ? a : p));
-  return a;
-}
-const LEVELS = ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B", "5A", "5B"];
 
-/* ---------- labels (strict wording: never claim more than the data says) ---------- */
-function grammarLabel(m) {
-  if (m.status === "NOT_FOUND") return "NOT FOUND IN TEXTBOOK";
-  if (m.status === "NEEDS_REVIEW") return "POSSIBLE MATCH";
-  if (m.match_type === "RELATED") return "RELATED FORM";
-  if (m.status === "LIKELY") return "POSSIBLE MATCH";
-  return "FOUND IN TEXTBOOK";
-}
-function vocabLabel(m) {
-  if (m.status === "NOT_FOUND") return "Not found in textbook";
-  return { EXACT: "Exact dictionary match", CONJUGATED: "Conjugated form", RELATED: "Related word" }[m.match_type] || m.match_type;
-}
-const badge = (m, text) => `<span class="chip s-${m.status}">${h(text)}</span>`;
+/* ---------- language of the translations ---------- */
+$("#lang").innerHTML = Object.entries(TL_LANGS).map(([k, v]) => `<option value="${k}">${h(v)}</option>`).join("");
+$("#lang").value = TL.lang;
+$("#lang").onchange = () => { TL.lang = $("#lang").value; if (lastPanel) showPanel(lastPanel); };
 
 /* ---------- tabs ---------- */
 $$("#tabs button").forEach(b => b.onclick = () => {
   $$("#tabs button").forEach(x => x.classList.toggle("on", x === b));
   $$(".tab").forEach(t => t.hidden = t.id !== "tab-" + b.dataset.tab);
-  const loader = { vocab: loadVocab, grammar: loadGrammar, study: loadStudyHome, workbook: loadWorkbook, review: loadReview, saved: loadSaved, status: loadStatus }[b.dataset.tab];
-  if (loader) Promise.resolve().then(loader).catch(e => showError(e.message));      // a failing tab shows the banner instead of failing silently
+  const loader = { stories: loadStories, study: loadStudyHome, vocab: loadVocab, grammar: loadGrammar, workbook: loadWorkbook, review: loadReview, saved: loadSaved, status: loadStatus }[b.dataset.tab];
+  if (loader) Promise.resolve().then(loader).catch(e => showError(e.message));
 });
 
-/* ---------- reader ---------- */
-let cur = null;          // current analysis payload
-let selected = null;     // selected match id
+/* =====================================================================================================
+   READER
+   cur = { id, title, text, highlights: [{start, end, kind: "vocab"|"grammar", ref?, entry?}], storyId?, story? }
+   ===================================================================================================== */
+let cur = null;
+let lastPanel = null;
 
 async function loadPassages() {
-  const list = RO ? LS.get("kr.passages", []).map(p => ({ id: p.id, title: p.title, preview: (p.text || "").slice(0, 80) })) : await api("/passages");
-  $("#passage-list").innerHTML = list.map(p => `<li data-id="${p.id}" class="${cur && cur.id === p.id ? "on" : ""}"><span>${h(p.title || p.preview || "(untitled)")}</span></li>`).join("") || `<li class="muted">No passages yet</li>`;
-  $$("#passage-list li[data-id]").forEach(li => li.onclick = () => openPassage(+li.dataset.id));
+  const list = await store.passages.list();
+  $("#passage-list").innerHTML = list.map(p => `<li data-id="${h(p.id)}" class="${cur && String(cur.id) === String(p.id) ? "on" : ""}"><span>${h(p.title || p.preview || "(untitled)")}</span></li>`).join("") || `<li class="muted">No passages yet</li>`;
+  $$("#passage-list li[data-id]").forEach(li => li.onclick = () => openPassage(li.dataset.id));
 }
-async function openPassage(id, data) {
-  cur = data || (RO ? LS.get("kr.passages", []).find(p => p.id === id) : await api("/passages/" + id));
-  if (!cur) return;
-  selected = null;
-  $("#p-title").textContent = cur.title || "(untitled)";
-  for (const b of ["#btn-edit", "#btn-reanalyze", "#btn-delete"]) $(b).hidden = false;
-  $("#stale").hidden = !cur.stale;
+
+async function openPassage(id) {
+  const p = await store.passages.get(id);
+  if (!p) return;
+  await withLookupHighlights(p);
+  showReading(p);
+}
+
+/* Colour the words that are in the textbook word list. Plain rules, no morphology: approximate (see services/lookup.py). */
+async function withLookupHighlights(doc) {
+  doc.highlights = [];
+  const tokens = [...doc.text.matchAll(/\S+/g)];
+  const words = [...new Set(tokens.map(m => m[0].replace(TRIM, "")).filter(w => /^[가-힣]+$/.test(w)))].slice(0, 1500);
+  if (!words.length) return;
+  try {
+    const { matches } = await api("/vocab/lookup", { method: "POST", body: { tokens: words } });
+    for (const m of tokens) {
+      const core = m[0].replace(TRIM, "");
+      const hit = matches[core];
+      if (!hit) continue;
+      const start = m.index + m[0].indexOf(core);
+      doc.highlights.push({ start, end: start + core.length, kind: "vocab", entry: hit });
+    }
+  } catch { /* colours are a nicety: the text stays readable and clickable without them */ }
+}
+
+function showReading(doc) {
+  cur = doc;
+  lastPanel = null;
+  $("#p-title").textContent = doc.title || "(untitled)";
+  const isStory = !!doc.storyId;
+  $("#btn-edit").hidden = isStory; $("#btn-delete").hidden = isStory; $("#btn-read").hidden = false;
+  $("#story-box").hidden = !isStory;
+  const legend = $("#legend");
+  legend.hidden = false;
+  legend.innerHTML = isStory
+    ? `<span class="dot v"></span> word to learn <span class="dot g"></span> grammar to learn <span class="muted">· click any word for its translation</span>`
+    : `<span class="dot v"></span> word found in your textbooks' word list <span class="muted">(approximate matching) · click any word for its translation</span>`;
   renderText();
-  $("#detail").innerHTML = `<p class="muted">Click a highlighted word or grammar structure.</p>`;
+  $("#detail").innerHTML = `<p class="muted">Click any word. Its translation appears here.</p>`;
   loadPassages();
   if (typeof onPassageOpened === "function") onPassageOpened();
 }
-$("#btn-analyze").onclick = async () => {
-  const text = $("#new-text").value;
-  if (!text.trim()) return;
-  $("#btn-analyze").disabled = true; $("#analyze-msg").textContent = "Analysing locally with Kiwi…";
-  try {
-    const title = $("#new-title").value;
-    const a = RO ? await createLocal(title, text) : await api("/passages", { method: "POST", body: { title, text } });
-    $("#new-text").value = ""; $("#new-title").value = ""; $("#analyze-msg").textContent = "";
-    await openPassage(a.id, RO ? a : undefined);
-  } catch (e) { $("#analyze-msg").textContent = "Error: " + e.message; }
-  $("#btn-analyze").disabled = false;
-};
-$("#btn-reanalyze").onclick = async () => { cur = RO ? await updateLocal(cur.id, cur.title, cur.text) : await api(`/passages/${cur.id}/reanalyze`, { method: "POST" }); $("#stale").hidden = true; renderText(); };
-$("#btn-delete").onclick = async () => { if (confirm("Delete this passage?")) { const gone = cur.id; if (RO) LS.set("kr.passages", LS.get("kr.passages", []).filter(p => p.id !== gone)); else await api("/passages/" + gone, { method: "DELETE" }); if (typeof onPassageDeleted === "function") await onPassageDeleted(gone); cur = null; $("#text").innerHTML = ""; $("#p-title").textContent = "Select or paste a passage"; loadPassages(); } };
-$("#btn-edit").onclick = () => formDialog("Edit passage", [["title", "Title", cur.title || ""], ["text", "Text", cur.text, "area"]], async v => { cur = RO ? await updateLocal(cur.id, v.title, v.text) : await api("/passages/" + cur.id, { method: "PUT", body: v }); selected = null; renderText(); loadPassages(); });
-["#t-grammar", "#t-vocab", "#t-unmatched"].forEach(s => $(s).onchange = renderText);
 
 function renderText() {
   if (!cur) return;
-  const text = cur.text, el = $("#text");
-  const showG = $("#t-grammar").checked, showV = $("#t-vocab").checked, showU = $("#t-unmatched").checked;
-  el.classList.toggle("show-g", showG); el.classList.toggle("show-v", showV); el.classList.toggle("show-u", showU);
-  const ms = cur.matches.filter(m => m.layer === "grammar" ? (m.status !== "NOT_FOUND" ? showG : showU) : showV);
-  const cuts = new Set([0, text.length]);
-  ms.forEach(m => { cuts.add(m.start); cuts.add(m.end); });
-  const sel = selected && cur.matches.find(m => m.id === selected);
-  const sent = sel && cur.sentences.find(s => s.no === sel.sentence_no);
-  if (sent) { cuts.add(sent.start); cuts.add(sent.end); }
-  const pts = [...cuts].filter(c => c >= 0 && c <= text.length).sort((a, b) => a - b);
-  let html = "";
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    const cover = ms.filter(m => m.start <= a && b <= m.end);
-    const g = cover.filter(m => m.layer === "grammar" && m.status !== "NOT_FOUND"), v = cover.filter(m => m.layer === "vocab"), u = cover.filter(m => m.layer === "grammar" && m.status === "NOT_FOUND");
-    const longest = arr => arr.slice().sort((x, y) => (y.end - y.start) - (x.end - x.start))[0];
-    const cls = [];
-    if (g.length) cls.push("gs-" + longest(g).status);
-    if (v.length) { const found = v.filter(x => x.status !== "NOT_FOUND"); cls.push("vs-" + longest(found.length ? found : v).status); }
-    if (sent && a >= sent.start && b <= sent.end) cls.push("sent-on");
-    if (sel && a >= sel.start && b <= sel.end) cls.push("sel");
-    const attrs = (g.length ? ` data-g="${g.map(x => x.id)}"` : "") + (v.length ? ` data-v="${v.map(x => x.id)}"` : "") + (u.length ? ` data-u="${u.map(x => x.id)}"` : "");
-    html += `<span class="${cls.join(" ")}"${attrs}>${h(text.slice(a, b))}</span>`;
+  const text = cur.text;
+  const hl = (cur.highlights || []).map((H, i) => ({ ...H, i })).sort((a, b) => a.start - b.start);
+  let html = "", pos = 0, hi = 0;
+  for (const m of text.matchAll(/\S+/g)) {
+    const s = m.index, e = s + m[0].length;
+    html += h(text.slice(pos, s)) + `<span class="w" data-s="${s}" data-e="${e}">`;
+    while (hi < hl.length && hl[hi].end <= s) hi++;
+    let p = s, j = hi;
+    while (j < hl.length && hl[j].start < e) {
+      const H = hl[j], a = Math.max(H.start, s), b = Math.min(H.end, e);
+      if (a > p) html += h(text.slice(p, a));
+      if (b > a) html += `<span class="h ${H.kind === "grammar" ? "hg" : "hv"}" data-h="${H.i}">${h(text.slice(a, b))}</span>`;
+      p = Math.max(p, b); j++;
+    }
+    if (p < e) html += h(text.slice(p, e));
+    html += `</span>`;
+    pos = e;
   }
-  el.innerHTML = html;
-  $$("span", el).forEach(sp => sp.onclick = () => clickSpan(sp));
+  $("#text").innerHTML = html + h(text.slice(pos));
 }
 
-function clickSpan(sp) {
-  const ids = ["g", "v", "u"].flatMap(k => (sp.dataset[k] || "").split(",").filter(Boolean).map(Number));
-  const all = ids.map(id => cur.matches.find(m => m.id === id)).filter(Boolean);
-  if (!all.length) return;
-  all.sort((a, b) => (a.layer === b.layer ? (a.end - a.start) - (b.end - b.start) : a.layer === "grammar" ? -1 : 1));
-  const preferred = all.find(m => m.layer === "grammar" && m.status !== "NOT_FOUND") || all[0];
-  showMatch(preferred.id, all);
-}
+$("#text").onclick = ev => {
+  const w = ev.target.closest(".w");
+  if (!w) return;
+  const hEl = ev.target.closest("[data-h]");
+  $$("#text .w.sel").forEach(x => x.classList.remove("sel"));
+  w.classList.add("sel");
+  openWord(+w.dataset.s, +w.dataset.e, hEl ? +hEl.dataset.h : null);
+};
 
-async function loadMatchDetail(m) {
-  const base = m.layer === "vocab" ? "/vocab/" : "/grammar/";
-  const item = m.ref_id ? await api(base + m.ref_id) : null;
-  const others = await Promise.all((m.candidates || []).filter(c => c.id !== m.ref_id).map(c => api(base + c.id).catch(() => null)));
-  return { match: m, item, candidate_items: others.filter(Boolean), sentence: cur.sentences.find(x => x.no === m.sentence_no) || null };
-}
-
-let matchToken = 0;
-async function showMatch(id, siblings) {
-  const token = ++matchToken;
-  selected = id; renderText();
-  const d = await loadMatchDetail(cur.matches.find(x => x.id === id));
-  if (token !== matchToken) return;                 // a newer click already replaced this panel
-  const m = d.match, it = d.item, box = $("#detail");
-  const chips = (siblings || []).filter(x => x.id !== id).map(x => `<button data-m="${x.id}" class="chip s-${x.status}">${x.layer === "grammar" ? "G" : "V"}: ${h(x.layer === "grammar" ? (x.dict_form || x.surface) : x.dict_form || x.surface)}</button>`).join(" ");
-  const sentence = d.sentence ? cur.text.slice(d.sentence.start, d.sentence.end) : "";
-  const rel = m.start - (d.sentence ? d.sentence.start : 0);
-  const sentHtml = sentence ? `${h(sentence.slice(0, rel))}<mark>${h(cur.text.slice(m.start, m.end))}</mark>${h(sentence.slice(rel + (m.end - m.start)))}` : "";
-  let body = "";
-  if (m.layer === "grammar") body = grammarPanel(m, it, d, sentHtml); else body = vocabPanel(m, it, sentHtml, sentence);
-  box.innerHTML = body + (chips ? `<div class="row"><span class="lbl">Also at this position</span><br>${chips}</div>` : "");
-  $$("button[data-m]", box).forEach(b => b.onclick = () => showMatch(+b.dataset.m, siblings));
-  wirePanel(m, it, d);
-}
-
-function provenance(it) {
-  if (!it) return "";
-  const bits = [it.level && `Level ${it.level}`, it.unit && `Unit ${it.unit}`, it.page ? `p. ${it.page}` : (it.pdf_page ? `PDF p. ${it.pdf_page}` : null)].filter(Boolean);
-  return `<div class="row"><span class="lbl">Textbook reference</span><br>${bits.map(h).join(" · ") || "<em>no level/unit recorded</em>"}${it.source_file ? `<br><span class="muted">${h(it.source_file)}</span>` : ""}${it.corrected ? ` <span class="chip">manually corrected</span>` : ""}</div>`;
-}
-
-function grammarPanel(m, it, d, sentHtml) {
-  let s = `<h2>Grammar</h2>`;
-  if (!it) {
-    return s + `<h3>${h(m.surface)}</h3><p>${badge(m, "NOT FOUND IN TEXTBOOK")}</p><div class="warn">No matching grammar item in the uploaded textbook database. Detected morpheme: <b>${h(m.dict_form)}</b>. Nothing is invented here.${RO ? "" : " You can add a grammar item in the Grammar tab."}</div>
-      <div class="row"><span class="lbl">In your passage</span><blockquote>${sentHtml}</blockquote></div>`;
+function sentenceAround(text, pos) {
+  for (const m of text.matchAll(/[^\n.!?…]+(?:[.!?…]+["'”’)\]]*)?/g)) {
+    if (m.index <= pos && pos < m.index + m[0].length) return m[0].trim();
   }
-  s += `<h3>${h(it.pattern)}</h3><p class="sub">${badge(m, grammarLabel(m))} <span class="muted">detected: “${h(m.surface)}” · confidence ${Math.round((m.confidence || 0) * 100)}%</span></p>`;
-  if (m.note) s += `<div class="warn">${h(m.note)}</div>`;
-  if (it.status === "needs_review") s += `<div class="warn">This textbook entry comes from a scan that has not been reviewed. The pattern text may contain OCR errors.</div>`;
-  s += provenance(it);
-  s += `<div class="row"><span class="lbl">Original textbook explanation</span>${it.explanation_original ? `<blockquote>${h(it.explanation_original)}</blockquote>` : `<div class="empty">Not in the uploaded textbook data yet.</div>`}</div>`;
-  if (it.explanation_ko) s += `<div class="row"><span class="lbl">Korean explanation</span><blockquote>${h(it.explanation_ko)}</blockquote></div>`;
-  s += `<div class="row"><span class="lbl">Meaning (Uzbek, from the book)</span><br>${h(it.meaning_uz || "—")}</div>`;
-  s += `<div class="row"><span class="lbl">Meaning (English)</span><br>${it.meaning_en ? h(it.meaning_en) : `<span class="muted">not provided by the textbook</span>`}<span class="edit-only"><br><input id="en-input" placeholder="Add English meaning…" value="${h(it.meaning_en || "")}"><button id="en-save">Save English</button></span></div>`;
-  if (it.formation) s += `<details><summary class="lbl">Formation (from the book)</summary><pre class="pre">${h(it.formation)}</pre></details>`;
-  s += `<div class="row"><span class="lbl">Textbook examples</span>${it.examples.length ? it.examples.map(e => `<blockquote>${h(e.sentence)}<br><span class="muted">${h(e.source_ref || "")}</span></blockquote>`).join("") : `<div class="empty">No examples stored for this item.</div>`}</div>`;
-  if (it.notes) s += `<details><summary class="lbl">Notes &amp; comparisons (verbatim OCR)</summary><pre class="pre">${h(it.notes)}</pre></details>`;
-  if (it.workbook && it.workbook.length) s += `<details><summary class="lbl">Workbook exercises (${it.workbook.length}, OCR draft)</summary>${it.workbook.map(w => `<div class="wb"><b>${w.exercise_no ? "연습 " + h(w.exercise_no) + " · " : ""}${h(w.instruction || "")}</b><pre class="pre">${h(w.body || "")}</pre><span class="muted">${h(w.level)} workbook, p.${h(w.printed_page ?? "PDF " + w.pdf_page)}</span></div>`).join("")}</details>`;
-  s += `<div class="row"><span class="lbl">In your passage</span><blockquote>${sentHtml}</blockquote></div>`;
-  if (d.candidate_items.length) s += `<div class="row"><span class="lbl">Other textbook items matching this span</span>${d.candidate_items.map(c => `<div><b>${h(c.pattern)}</b> <span class="muted">${h(c.level || "")}</span> <button class="edit-only" data-use="${c.id}">Use this</button></div>`).join("")}</div>`;
-  s += `<div class="row"><button id="save-it" class="primary">Save grammar</button> ${it.status !== "verified" ? `<button class="edit-only" id="approve">Mark item verified</button>` : ""}</div>`;
+  return "";
+}
+
+function openWord(s, e, hi) {
+  const text = cur.text, raw = text.slice(s, e), word = raw.replace(TRIM, "") || raw;
+  const H = hi != null ? cur.highlights[hi] : null;
+  const ctx = { word, sentence: sentenceAround(text, s), kind: H ? H.kind : null, ref: H ? H.ref : null, entry: null, item: null, phrase: null };
+  if (H) {
+    const shown = text.slice(H.start, H.end).replace(TRIM, "");
+    if (shown !== word) ctx.phrase = shown;
+    if (H.entry) ctx.entry = H.entry;
+    if (cur.story && H.ref) {
+      if (H.kind === "vocab") ctx.entry = (cur.story.target_vocab.find(t => t.target === H.ref) || {}).entry || null;
+      else ctx.item = (cur.story.target_grammar.find(t => t.target === H.ref) || {}).item || null;
+      ctx.target = H.ref;
+    }
+  }
+  showPanel(ctx);
+}
+
+/* ---------- the side panel ---------- */
+function showPanel(ctx) {
+  lastPanel = ctx;
+  const box = $("#detail");
+  const lang = TL.lang;
+  box.innerHTML = `
+    <h2>${ctx.kind === "grammar" ? "Grammar" : "Word"}</h2>
+    <div class="kword ko">${h(ctx.word)}</div>
+    <div id="tr-word" class="trbox"></div>
+    ${ctx.phrase ? `<div class="lbl">Highlighted phrase</div><div class="ko"><b>${h(ctx.phrase)}</b></div><div id="tr-phrase" class="trbox"></div>` : ""}
+    <div id="textbook"></div>
+    ${ctx.sentence ? `<div class="lbl">Sentence</div><blockquote class="ko">${h(ctx.sentence)}</blockquote><div id="tr-sent" class="trbox"></div>` : ""}
+    <div class="row actions">
+      <button id="p-save" class="primary">${ctx.entry || ctx.item ? "Save to my flashcards" : `Save “${h(ctx.word)}”`}</button>
+      ${ctx.noTranslate ? "" : `<a href="${gtLink(ctx.word, lang)}" target="_blank" rel="noopener">Google Translate ↗</a>`}
+    </div>`;
+  if (ctx.noTranslate) $("#tr-word").innerHTML = "";                       // a grammar pattern like V+아/어 보니(까) is not translatable text
+  else if (isKorean(ctx.word)) gtRender($("#tr-word"), ctx.word, { roman: true, alts: true });
+  else $("#tr-word").innerHTML = `<span class="muted">(not Korean text)</span>`;
+  if (ctx.phrase) gtRender($("#tr-phrase"), ctx.phrase);
+  if (ctx.sentence) gtRender($("#tr-sent"), ctx.sentence);
+  renderTextbookBlock(ctx);
+  $("#p-save").onclick = async ev => {
+    try {
+      if (ctx.entry) await store.saved.add({ kind: "vocab", ref_id: ctx.entry.id, sentence: ctx.sentence, item: { headword: ctx.entry.headword, level: ctx.entry.level, unit: ctx.entry.unit } });
+      else if (ctx.item) await store.saved.add({ kind: "grammar", ref_id: ctx.item.id, sentence: ctx.sentence, item: { headword: ctx.item.pattern, level: ctx.item.level, unit: ctx.item.unit } });
+      else await store.saved.add({ kind: "word", text: ctx.word, sentence: ctx.sentence });
+      ev.target.textContent = "Saved ✓"; ev.target.disabled = true;
+    } catch (e) { showError(e.message); }
+  };
+}
+
+const refLine = it => [it.level && `Level ${it.level}`, it.unit && `Unit ${it.unit}`, it.page ? `p. ${it.page}` : (it.pdf_page ? `PDF p. ${it.pdf_page}` : null)].filter(Boolean).join(" · ") || "no level/unit recorded";
+
+async function renderTextbookBlock(ctx) {
+  const el = $("#textbook");
+  if (ctx.entry) {
+    const e = ctx.entry;
+    el.innerHTML = `<div class="lbl">In your textbooks</div><div class="tbcard"><b class="ko">${h(e.headword.replace(/\([^)]*\)/g, ""))}</b> <span class="muted">${h(refLine(e))}</span>${e.match === "stem" || e.match === "noun" ? ` <span class="muted">(approximate match)</span>` : ""}<div id="tb-extra"></div></div>`;
+    try {
+      const d = await api("/vocab/" + e.id);
+      if (lastPanel !== ctx) return;
+      $("#tb-extra").innerHTML = (d.meaning_en ? `<div>${h(d.meaning_en)}</div>` : "") + (d.examples.length ? d.examples.slice(0, 3).map(x => `<blockquote class="ko">${h(x.sentence)}</blockquote>`).join("") : "");
+    } catch { /* optional detail */ }
+  } else if (ctx.item || (ctx.kind === "grammar" && ctx.target)) {
+    const g = ctx.item;
+    if (!g) { el.innerHTML = `<div class="warn">“${h(ctx.target)}” is not in the grammar database.</div>`; return; }
+    el.innerHTML = `<div class="lbl">Grammar in your textbooks</div><div class="tbcard"><b class="ko">${h(g.pattern)}</b> <span class="muted">${h(refLine(g))}</span>
+      ${g.status === "needs_review" ? `<div class="warn">This entry was read from a scan and has not been reviewed: the pattern may contain OCR errors.</div>` : ""}
+      <div id="tb-extra"></div></div>`;
+    try {
+      const d = await api("/grammar/" + g.id);
+      if (lastPanel !== ctx) return;
+      $("#tb-extra").innerHTML = grammarBody(d, true);
+      wireTranslateButtons($("#tb-extra"));
+    } catch { /* optional detail */ }
+  }
+}
+
+function grammarBody(g, compact) {
+  let s = "";
+  s += g.explanation_original ? `<div class="lbl">Explanation (from the book)</div><blockquote>${h(g.explanation_original)}</blockquote>` : `<div class="empty">No explanation stored for this item.</div>`;
+  if (g.explanation_ko) s += `<blockquote class="ko">${h(g.explanation_ko)}</blockquote>`;
+  if (g.meaning_en) s += `<div>${h(g.meaning_en)}</div>`;
+  if (g.formation) s += `<details><summary class="lbl">Formation (from the book)</summary><pre class="pre">${h(g.formation)}</pre></details>`;
+  const exs = compact ? g.examples.slice(0, 3) : g.examples;
+  if (exs.length) s += `<div class="lbl">Examples from the book</div>` + exs.map(x => `<div class="exrow"><span class="ko">${h(x.sentence)}</span> <button class="mini" data-trans="${h(x.sentence)}">translate</button><div class="trbox"></div></div>`).join("");
+  if (!compact && g.notes) s += `<details><summary class="lbl">Notes &amp; comparisons (verbatim OCR)</summary><pre class="pre">${h(g.notes)}</pre></details>`;
+  if (!compact && g.workbook && g.workbook.length) s += `<details><summary class="lbl">Workbook exercises (${g.workbook.length}, OCR draft)</summary>${g.workbook.map(w => `<div class="wb"><b>${w.exercise_no ? "연습 " + h(w.exercise_no) + " · " : ""}${h(w.instruction || "")}</b><pre class="pre">${h(w.body || "")}</pre><span class="muted">${h(w.level)} workbook, p.${h(w.printed_page ?? "PDF " + w.pdf_page)}</span></div>`).join("")}</details>`;
   return s;
 }
-
-function vocabPanel(m, it, sentHtml, sentence) {
-  let s = `<h2>Vocabulary</h2><h3>${h(m.surface)}</h3>`;
-  s += `<p class="sub">${badge(m, vocabLabel(m))} <span class="muted">dictionary form: <b>${h(m.dict_form)}</b></span></p>`;
-  if (m.note) s += `<div class="warn">${h(m.note)}</div>`;
-  if (!it) return s + `<div class="warn">Not found in the uploaded textbook vocabulary. No definition is shown rather than a made-up one.</div><div class="row"><span class="lbl">In your passage</span><blockquote>${sentHtml}</blockquote></div>`;
-  s += `<div class="row"><span class="lbl">Textbook headword</span><br><b style="font-size:18px">${h(it.headword)}</b> <span class="muted">${h(it.pos || "")}${it.pos_source === "kiwi" ? " (POS guessed by Kiwi)" : ""}</span></div>`;
-  s += provenance(it);
-  s += `<div class="row"><span class="lbl">Textbook definition (Uzbek)</span><br>${h(it.meaning_uz || "—")}</div>`;
-  s += `<div class="row"><span class="lbl">English</span><br>${it.meaning_en ? h(it.meaning_en) : `<span class="muted">not provided by the textbook</span>`}<span class="edit-only"><br><input id="en-input" placeholder="Add English meaning…" value="${h(it.meaning_en || "")}"><button id="en-save">Save English</button></span></div>`;
-  s += `<div class="row"><span class="lbl">Textbook examples</span>${it.examples && it.examples.length ? it.examples.map(e => `<blockquote>${h(e.sentence)}</blockquote>`).join("") : `<div class="empty">No example sentence in the textbook data.</div>`}</div>`;
-  s += `<div class="row"><span class="lbl">Where you met it</span><blockquote>${sentHtml}</blockquote></div>`;
-  if (m.candidates.length > 1) s += `<div class="row"><span class="lbl">Other textbook entries for this form</span>${m.candidates.filter(c => c.id !== it.id).map(c => `<div><b>${h(c.headword)}</b> — ${h(c.meaning_uz || "")} <span class="muted">${h(c.level)} u${h(c.unit ?? "")}</span> <button class="edit-only" data-use="${c.id}">Use this</button></div>`).join("")}</div>`;
-  s += `<div class="row"><button id="save-it" class="primary">Save word</button></div>`;
-  return s;
+function wireTranslateButtons(root) {
+  $$("button[data-trans]", root).forEach(b => b.onclick = () => { const box = b.parentElement.querySelector(".trbox"); gtRender(box, b.dataset.trans); b.hidden = true; });
 }
 
-function wirePanel(m, it, d) {
-  const en = $("#en-save");
-  if (en && it) en.onclick = async () => {
-    await api(`/${m.layer === "vocab" ? "vocab" : "grammar"}/${it.id}`, { method: "PATCH", body: { meaning_en: $("#en-input").value } });
-    en.textContent = "Saved ✓";
-  };
-  const sv = $("#save-it");
-  if (sv && it) sv.onclick = async () => {
-    const sentence = d.sentence ? cur.text.slice(d.sentence.start, d.sentence.end) : null;
-    if (RO) {
-      const all = LS.get("kr.saved", []).filter(x => !(x.kind === m.layer && x.ref_id === it.id));
-      all.unshift({ id: Date.now(), kind: m.layer, ref_id: it.id, sentence, item: { headword: it.headword || it.pattern, meaning_uz: it.meaning_uz, meaning_en: it.meaning_en, level: it.level } });
-      if (!LS.set("kr.saved", all)) return alert("Browser storage is full.");
-    } else await api("/saved", { method: "POST", body: { kind: m.layer, ref_id: it.id, passage_id: cur.id, sentence } });
-    sv.textContent = "Saved ✓";
-  };
-  const ap = $("#approve");
-  if (ap && it) ap.onclick = async () => { await api("/grammar/" + it.id, { method: "PATCH", body: { status: "verified" } }); ap.textContent = "Verified ✓ (re-analyze to update highlights)"; $("#stale").hidden = false; };
-  $$("button[data-use]").forEach(b => b.onclick = async () => { await api("/matches/" + m.id, { method: "PATCH", body: { ref_id: +b.dataset.use, status: "LIKELY" } }); cur = await api("/passages/" + cur.id); renderText(); showMatch(m.id); });
-}
+/* ---------- reader actions ---------- */
+$("#btn-open").onclick = async () => {
+  const text = $("#new-text").value;
+  if (!text.trim()) return;
+  $("#btn-open").disabled = true; $("#open-msg").textContent = "";
+  try {
+    const p = await store.passages.create($("#new-title").value, text);
+    $("#new-text").value = ""; $("#new-title").value = "";
+    await withLookupHighlights(p);
+    showReading(p);
+  } catch (e) { $("#open-msg").textContent = "Error: " + e.message; }
+  $("#btn-open").disabled = false;
+};
+$("#btn-delete").onclick = async () => {
+  if (!cur || !confirm("Delete this passage?")) return;
+  const gone = cur.id;
+  await store.passages.remove(gone);
+  if (typeof onPassageDeleted === "function") await onPassageDeleted(gone);
+  cur = null; lastPanel = null;
+  $("#text").innerHTML = ""; $("#p-title").textContent = "Pick a story or paste a text";
+  for (const b of ["#btn-edit", "#btn-delete", "#btn-read"]) $(b).hidden = true;
+  $("#questions").hidden = true; $("#legend").hidden = true;
+  loadPassages();
+};
+$("#btn-edit").onclick = () => formDialog("Edit passage", [["title", "Title", cur.title || ""], ["text", "Text", cur.text, "area"]], async v => {
+  const p = await store.passages.update(cur.id, v.title, v.text);
+  await withLookupHighlights(p);
+  showReading(p);
+});
 
 /* ---------- generic form dialog ---------- */
 function formDialog(title, fields, onSave, extra) {
@@ -247,27 +274,37 @@ function formDialog(title, fields, onSave, extra) {
   return f;
 }
 
-/* ---------- vocabulary tab ---------- */
-let vPage = 0, gPage = 0;
-LEVELS.forEach(l => { $("#w-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); $("#r-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); $("#v-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); $("#g-level").insertAdjacentHTML("beforeend", `<option>${l}</option>`); });
-let vTimer;
-["#v-q", "#v-level", "#v-status"].forEach(s => $(s).oninput = () => { clearTimeout(vTimer); vTimer = setTimeout(() => { vPage = 0; loadVocab(); }, 250); });
+/* ---------- level selects ---------- */
+LEVELS.forEach(l => ["#v-level", "#g-level", "#w-level", "#r-level"].forEach(s => $(s).insertAdjacentHTML("beforeend", `<option>${l}</option>`)));
+const pager = (infoSel, total, page, lim) => $(infoSel).textContent = `${total ? Math.min(total, page * lim + 1) : 0}–${Math.min(total, (page + 1) * lim)} of ${total}`;
+const debounced = fn => { let t; return () => { clearTimeout(t); t = setTimeout(fn, 250); }; };
+
+/* =====================================================================================================
+   VOCABULARY
+   ===================================================================================================== */
+let vPage = 0;
+const vReload = debounced(() => { vPage = 0; loadVocab().catch(e => showError(e.message)); });
+["#v-q", "#v-level", "#v-status"].forEach(s => $(s).oninput = vReload);
 $("#v-prev").onclick = () => { vPage = Math.max(0, vPage - 1); loadVocab(); };
 $("#v-next").onclick = () => { vPage++; loadVocab(); };
 async function loadVocab() {
   const lim = 50;
   const r = await api(`/vocab?q=${encodeURIComponent($("#v-q").value)}&level=${$("#v-level").value}&status=${$("#v-status").value}&limit=${lim}&offset=${vPage * lim}`);
-  $("#v-table tbody").innerHTML = r.items.map(e => `<tr><td class="ko">${h(e.headword)}</td><td>${h(e.pos || "")}</td><td>${h(e.meaning_uz || "")}</td><td>${h(e.meaning_en || "")}</td><td>${h(e.level || "")}</td><td>${h(e.unit ?? "")}</td><td>${h(e.pdf_page ?? "")}</td><td><span class="chip ${e.status === "verified" ? "s-VERIFIED" : "s-LIKELY"}">${h(e.status)}</span></td><td><button class="edit-only" data-e="${e.id}">Edit</button></td></tr>`).join("");
-  $("#v-info").textContent = `${Math.min(r.total, vPage * lim + 1)}–${Math.min(r.total, (vPage + 1) * lim)} of ${r.total}`;
+  $("#v-table tbody").innerHTML = r.items.map(e => `<tr><td class="ko">${h(e.headword)}</td><td>${h(e.level || "")}</td><td>${h(e.unit ?? "")}</td>
+    <td><button class="mini" data-tr="${e.id}">Translate</button><div class="trbox" id="vt-${e.id}"></div></td>
+    <td><span class="chip ${e.status === "verified" ? "s-VERIFIED" : "s-LIKELY"}">${h(e.status)}</span></td><td class="edit-only"><button data-e="${e.id}">Edit</button></td></tr>`).join("");
+  pager("#v-info", r.total, vPage, lim);
+  $$("#v-table button[data-tr]").forEach(b => b.onclick = () => {
+    const e = r.items.find(x => x.id === +b.dataset.tr);
+    gtRender($("#vt-" + e.id), e.headword.replace(/\([^)]*\)/g, ""), { roman: true }); b.hidden = true;
+  });
   $$("#v-table button[data-e]").forEach(b => b.onclick = () => editVocab(r.items.find(x => x.id === +b.dataset.e)));
 }
 function editVocab(e) {
   const isNew = !e; e = e || {};
   formDialog(isNew ? "Add vocabulary (manual entry)" : "Edit vocabulary", [
-    ["headword", "Korean headword", e.headword], ["meaning_uz", "Uzbek (textbook)", e.meaning_uz], ["meaning_en", "English", e.meaning_en],
-    ["meaning_ko", "Korean definition", e.meaning_ko], ["pos", "Part of speech", e.pos], ["level", "Level", e.level], ["unit", "Unit", e.unit],
-    ...(isNew || true ? [["example", "Add example sentence (optional)", ""]] : []),
-    ["status", "Status", e.status || "manual", "select", ["verified", "needs_review", "manual"]],
+    ["headword", "Korean headword", e.headword], ["meaning_en", "English meaning (optional)", e.meaning_en], ["level", "Level", e.level], ["unit", "Unit", e.unit],
+    ["example", "Add example sentence (optional)", ""], ["status", "Status", e.status || "manual", "select", ["verified", "needs_review", "manual"]],
   ], async v => {
     v.unit = v.unit ? +v.unit : null;
     Object.keys(v).forEach(k => v[k] === "" && delete v[k]);
@@ -277,43 +314,54 @@ function editVocab(e) {
 }
 $("#v-add").onclick = () => editVocab(null);
 
-/* ---------- grammar tab ---------- */
-let gTimer;
-["#g-q", "#g-level", "#g-status", "#g-compiled"].forEach(s => $(s).oninput = () => { clearTimeout(gTimer); gTimer = setTimeout(() => { gPage = 0; loadGrammar(); }, 250); });
+/* =====================================================================================================
+   GRAMMAR
+   ===================================================================================================== */
+let gPage = 0;
+const gReload = debounced(() => { gPage = 0; loadGrammar().catch(e => showError(e.message)); });
+["#g-q", "#g-level", "#g-status"].forEach(s => $(s).oninput = gReload);
 $("#g-prev").onclick = () => { gPage = Math.max(0, gPage - 1); loadGrammar(); };
 $("#g-next").onclick = () => { gPage++; loadGrammar(); };
 async function loadGrammar() {
   const lim = 100;
-  const r = await api(`/grammar?q=${encodeURIComponent($("#g-q").value)}&level=${$("#g-level").value}&status=${$("#g-status").value}&compiled=${$("#g-compiled").value}&limit=${lim}&offset=${gPage * lim}`);
-  $("#g-table tbody").innerHTML = r.items.map(e => `<tr><td>${h(e.level || "")}</td><td>${h(e.entry_no || "")}</td><td class="ko">${h(e.pattern)}</td><td>${h(e.meaning_uz || "")}</td><td>${e.explanation_original ? "✓" : "—"}</td><td>${e.has_rule ? "✓" : `<span class="s-LIKELY">manual</span>`}</td><td><span class="chip ${e.status === "needs_review" ? "s-LIKELY" : "s-VERIFIED"}">${h(e.status)}</span></td><td><button class="edit-only" data-e="${e.id}">Edit</button></td></tr>`).join("");
-  $("#g-info").textContent = `${Math.min(r.total, gPage * lim + 1)}–${Math.min(r.total, (gPage + 1) * lim)} of ${r.total}`;
+  const r = await api(`/grammar?q=${encodeURIComponent($("#g-q").value)}&level=${$("#g-level").value}&status=${$("#g-status").value}&limit=${lim}&offset=${gPage * lim}`);
+  $("#g-table tbody").innerHTML = r.items.map(e => `<tr class="clickable" data-g="${e.id}"><td>${h(e.level || "")}</td><td>${h(e.entry_no || "")}</td><td class="ko">${h(e.pattern)}</td>
+    <td>${e.explanation_original ? "✓ explained" : '<span class="muted">pattern only</span>'}</td>
+    <td><span class="chip ${e.status === "needs_review" ? "s-LIKELY" : "s-VERIFIED"}">${h(e.status)}</span></td><td class="edit-only"><button data-e="${e.id}">Edit</button></td></tr>`).join("");
+  pager("#g-info", r.total, gPage, lim);
+  $$("#g-table tr[data-g]").forEach(tr => tr.onclick = ev => { if (ev.target.closest("button")) return; showGrammar(+tr.dataset.g); });
   $$("#g-table button[data-e]").forEach(b => b.onclick = async () => editGrammar(await api("/grammar/" + b.dataset.e)));
+}
+async function showGrammar(id) {
+  const g = await api("/grammar/" + id), box = $("#g-detail");
+  $$("#g-table tr.sel").forEach(t => t.classList.remove("sel"));
+  const row = $(`#g-table tr[data-g="${id}"]`); if (row) row.classList.add("sel");
+  box.innerHTML = `<h2>Grammar</h2><div class="kword ko">${h(g.pattern)}</div><p class="muted">${h(refLine(g))} · ${h(g.status)}</p>
+    ${g.status === "needs_review" ? `<div class="warn">Read from a scan and not yet reviewed: the pattern text may contain OCR errors.</div>` : ""}${grammarBody(g, false)}`;
+  wireTranslateButtons(box);
 }
 function editGrammar(e) {
   const isNew = !e; e = e || {};
-  const f = formDialog(isNew ? "Add grammar item (manual entry)" : `Edit grammar item ${e.level || ""} #${e.entry_no || ""}`, [
-    ["pattern", "Pattern (e.g. V+(으)ㄹ 수 있다)", e.pattern], ["meaning_uz", "Uzbek gloss (textbook)", e.meaning_uz], ["meaning_en", "English meaning", e.meaning_en],
-    ["explanation_original", "Original textbook explanation", e.explanation_original, "area"], ["explanation_ko", "Korean explanation", e.explanation_ko],
-    ["formation", "Formation rule", e.formation], ["level", "Level", e.level], ["unit", "Unit", e.unit],
-    ["example", "Add textbook example sentence (optional)", ""],
+  formDialog(isNew ? "Add grammar item (manual entry)" : `Edit grammar item ${e.level || ""} #${e.entry_no || ""}`, [
+    ["pattern", "Pattern (e.g. V+(으)ㄹ 수 있다)", e.pattern], ["meaning_en", "English meaning (optional)", e.meaning_en],
+    ["explanation_original", "Original textbook explanation", e.explanation_original, "area"], ["formation", "Formation rule", e.formation],
+    ["level", "Level", e.level], ["unit", "Unit", e.unit], ["page", "Book page", e.page], ["example", "Add textbook example sentence (optional)", ""],
     ["status", "Status", e.status || "manual", "select", ["verified", "needs_review", "manual"]],
   ], async v => {
-    v.unit = v.unit ? +v.unit : null;
+    ["unit", "page"].forEach(k => v[k] = v[k] ? +v[k] : null);
     Object.keys(v).forEach(k => v[k] === "" && delete v[k]);
-    const r = await api(isNew ? "/grammar" : "/grammar/" + e.id, { method: isNew ? "POST" : "PATCH", body: v });
-    if (r.compiled === false) alert("Saved, but this notation could not be compiled into a detection rule (it needs a V/A/N+ prefix). It will not be auto-detected.");
+    await api(isNew ? "/grammar" : "/grammar/" + e.id, { method: isNew ? "POST" : "PATCH", body: v });
     loadGrammar();
-  }, `<div class="row"><label>Test rule on a sentence<input id="rt-sent" placeholder="e.g. 내일 갈 수 있어요"></label><button type="button" id="rt-go">Test</button> <span id="rt-out" class="muted"></span></div>`);
-  $("#rt-go", f).onclick = async () => {
-    const r = await api("/grammar/test-rule", { method: "POST", body: { pattern: f.elements.pattern.value, sentence: $("#rt-sent").value } });
-    $("#rt-out").textContent = !r.compiled ? "Cannot compile this notation." : r.matches.length ? "Matches: " + r.matches.map(m => `“${m.surface}” (${m.match_type})`).join(", ") : "No match. Forms tried: " + r.forms.join(" · ");
-  };
+  });
 }
 $("#g-add").onclick = () => editGrammar(null);
 
-/* ---------- workbook tab ---------- */
-let wPage = 0, wTimer, wSections = null;
-["#w-level", "#w-section", "#w-q"].forEach(s => $(s).oninput = () => { clearTimeout(wTimer); wTimer = setTimeout(() => { wPage = 0; loadWorkbook(); }, 250); });
+/* =====================================================================================================
+   WORKBOOK
+   ===================================================================================================== */
+let wPage = 0, wSections = null;
+const wReload = debounced(() => { wPage = 0; loadWorkbook().catch(e => showError(e.message)); });
+["#w-level", "#w-section", "#w-q"].forEach(s => $(s).oninput = wReload);
 $("#w-prev").onclick = () => { wPage = Math.max(0, wPage - 1); loadWorkbook(); };
 $("#w-next").onclick = () => { wPage++; loadWorkbook(); };
 async function loadWorkbook() {
@@ -321,8 +369,8 @@ async function loadWorkbook() {
   const r = await api(`/workbook?level=${$("#w-level").value}&section=${$("#w-section").value}&q=${encodeURIComponent($("#w-q").value)}&limit=${lim}&offset=${wPage * lim}`);
   if (!wSections) { wSections = r.sections; $("#w-section").insertAdjacentHTML("beforeend", Object.entries(r.sections).map(([k, v]) => `<option value="${k}">${h(v)}</option>`).join("")); }
   $("#w-list").innerHTML = r.items.map(w => `<article class="wbcard"><header><b>${h(r.sections[w.section] || w.section)}</b> · ${h(w.level)}${w.heading ? ` · <span class="ko">${h(w.heading)}</span>` : ""}${w.exercise_no && w.section !== "script" ? ` · 연습 ${h(w.exercise_no)}` : ""} <span class="muted">p.${h(w.printed_page ?? "PDF " + w.pdf_page)}</span></header>
-    <p>${h(w.instruction || "")}</p><pre class="pre ko">${h(w.body || "")}</pre><button data-read="${w.id}">Analyze in reader</button></article>`).join("") || `<p class="muted">Nothing matches.</p>`;
-  $("#w-info").textContent = `${Math.min(r.total, wPage * lim + 1)}–${Math.min(r.total, (wPage + 1) * lim)} of ${r.total}`;
+    <p>${h(w.instruction || "")}</p><pre class="pre ko">${h(w.body || "")}</pre><button data-read="${w.id}">Open in the reader</button></article>`).join("") || `<p class="muted">Nothing matches.</p>`;
+  pager("#w-info", r.total, wPage, lim);
   $$("#w-list button[data-read]").forEach(b => b.onclick = () => {
     const w = r.items.find(x => x.id === +b.dataset.read);
     $("#new-title").value = `${w.level} WB ${r.sections[w.section] || w.section}${w.exercise_no && w.section !== "script" ? " " + w.exercise_no : ""}`;
@@ -331,77 +379,54 @@ async function loadWorkbook() {
   });
 }
 
-/* ---------- saved + status ---------- */
-async function loadSaved() {
-  const r = RO ? LS.get("kr.saved", []) : await api("/saved");
-  $("#s-table tbody").innerHTML = r.map(s => `<tr><td>${h(s.kind)}</td><td class="ko">${h(s.item ? s.item.headword : "(deleted)")}</td><td>${h(s.item?.meaning_uz || "")}</td><td>${h(s.item?.meaning_en || "")}</td><td>${h(s.item?.level || "")}</td><td>${h(s.sentence || "")}</td><td><button data-d="${s.id}">Remove</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">Nothing saved yet.</td></tr>`;
-  $$("#s-table button[data-d]").forEach(b => b.onclick = async () => { if (RO) LS.set("kr.saved", LS.get("kr.saved", []).filter(x => x.id !== +b.dataset.d)); else await api("/saved/" + b.dataset.d, { method: "DELETE" }); loadSaved(); });
-}
-async function loadStatus() {
-  const o = await api("/overview");
-  $("#status-body").innerHTML = `<div class="kv"><span>Vocabulary entries</span><b>${o.vocab}</b><span>…flagged for review</span><b>${o.vocab_needs_review}</b><span>…with an English meaning</span><b>${o.vocab_with_english}</b>
-  <span>Grammar items</span><b>${o.grammar}</b><span>…auto-detectable (compiled rule)</span><b>${o.grammar_detectable}</b><span>…still unreviewed (scan/OCR)</span><b>${o.grammar_needs_review}</b>
-  <span>…with an original textbook explanation</span><b>${o.grammar_with_explanation}</b><span>Passages</span><b>${o.passages}</b><span>Saved items</span><b>${o.saved}</b><span>Workbook exercises / scripts</span><b>${o.workbook_items}</b></div>
-  <h2>Imported sources</h2><ul>${o.sources.map(s => `<li>${h(s.filename)} — ${h(s.kind)} (${h(s.level || "")})</li>`).join("")}</ul>
-  <p class="muted">Original explanations and examples exist only where a student book was imported (3B, 4A, 4B — Grammar Extension sections). Levels 1A–3A, 5A and 5B have no student book here, so their grammar items carry only the pattern and Uzbek gloss from the scanned index until you add material. Workbook exercises (3A–4B) are shown as OCR drafts in the Workbook tab.${RO ? " Items marked possible match come from unreviewed scans and may contain OCR errors." : " Everything OCR'd stays needs_review until you approve it in the Review tab."}</p>`;
-}
-
-/* ---------- review tab (manual correction of OCR'd textbook data) ---------- */
-let rPage = 0, rSel = null, rTimer;
-["#r-kind", "#r-level", "#r-status", "#r-expl", "#r-q"].forEach(s => $(s).oninput = () => { clearTimeout(rTimer); rTimer = setTimeout(() => { rPage = 0; loadReview(); }, 250); });
-$("#r-prev").onclick = () => { rPage = Math.max(0, rPage - 1); loadReview(); };
-$("#r-next").onclick = () => { rPage++; loadReview(); };
+/* =====================================================================================================
+   REVIEW (local only): fix OCR'd records beside the page image
+   ===================================================================================================== */
+let rPage = 0, rSel = null;
+const rReload = debounced(() => { rPage = 0; loadReview().catch(e => showError(e.message)); });
+["#r-kind", "#r-level", "#r-status", "#r-expl", "#r-q"].forEach(s => { const el = $(s); if (el) el.oninput = rReload; });
+if ($("#r-prev")) { $("#r-prev").onclick = () => { rPage = Math.max(0, rPage - 1); loadReview(); }; $("#r-next").onclick = () => { rPage++; loadReview(); }; }
 async function loadReview() {
   const lim = 60, kind = $("#r-kind").value;
   $("#r-expl").hidden = kind !== "grammar"; $("#r-bulk").hidden = kind !== "grammar";
   const r = await api(`/admin/queue?kind=${kind}&status=${$("#r-status").value}&level=${$("#r-level").value}&has_explanation=${$("#r-expl").value}&q=${encodeURIComponent($("#r-q").value)}&limit=${lim}&offset=${rPage * lim}`);
-  $("#r-list").innerHTML = r.items.map(i => `<li data-id="${i.id}" class="${rSel === i.id ? "on" : ""}"><span class="ko">${h(i.label)}</span><small>${h(i.level || "")}${i.unit ? " · u" + i.unit : ""}${i.page ? " · p" + i.page : ""} · ${h(i.status)}${kind === "grammar" ? (i.has_expl ? " · explained" : " · no explanation") + (i.has_rule ? "" : " · not detectable") : ""}</small></li>`).join("") || `<li class="muted">Nothing here.</li>`;
-  $("#r-info").textContent = `${Math.min(r.total, rPage * lim + 1)}–${Math.min(r.total, (rPage + 1) * lim)} of ${r.total}`;
+  $("#r-list").innerHTML = r.items.map(i => `<li data-id="${i.id}" class="${rSel === i.id ? "on" : ""}"><span class="ko">${h(i.label)}</span><small>${h(i.level || "")}${i.unit ? " · u" + i.unit : ""}${i.page ? " · p" + i.page : ""} · ${h(i.status)}${kind === "grammar" ? (i.has_expl ? " · explained" : " · no explanation") : ""}</small></li>`).join("") || `<li class="muted">Nothing here.</li>`;
+  pager("#r-info", r.total, rPage, lim);
   $$("#r-list li[data-id]").forEach(li => li.onclick = () => openReview(+li.dataset.id));
 }
-$("#r-bulk").onclick = async () => {
+if ($("#r-bulk")) $("#r-bulk").onclick = async () => {
   const level = $("#r-level").value;
   if (!level) return alert("Choose a level first.");
   if (!confirm(`Mark every unreviewed ${level} grammar item that has a textbook explanation as VERIFIED? Only do this after checking a sample against the page images.`)) return;
   const r = await api("/admin/approve", { method: "POST", body: { kind: "grammar", level, only_with_explanation: true } });
-  alert(`${r.approved} items approved. Re-analyze passages to refresh highlights.`); loadReview();
-};
-$("#r-calib").onclick = async () => {
-  const level = $("#r-level").value;
-  $("#r-detail").innerHTML = `<p class="muted">Running every textbook example through Kiwi + the matcher…</p>`;
-  const r = await api("/admin/calibration" + (level ? "?level=" + level : ""));
-  $("#r-detail").innerHTML = `<h3>Calibration${level ? " · " + level : ""}</h3><p>${r.totals.hits}/${r.totals.examples} textbook examples are detected by their own item's rule (recall ${Math.round((r.totals.recall || 0) * 100)}%) across ${r.totals.items} items. Low scores usually mean either a rule that needs fixing, or "examples" that really belong to a different pattern (comparison notes).</p>
-  <table class="grid"><thead><tr><th>Recall</th><th>Item</th><th>Level</th><th>Misses</th></tr></thead><tbody>${r.items.map(i => `<tr><td>${i.hits}/${i.examples}</td><td class="ko"><a href="#" data-g="${i.id}">${h(i.pattern)}</a></td><td>${h(i.level)}</td><td>${i.misses.slice(0, 2).map(m => h(m.sentence)).join("<br>")}</td></tr>`).join("")}</tbody></table>`;
-  $$("#r-detail a[data-g]").forEach(a => a.onclick = ev => { ev.preventDefault(); $("#r-kind").value = "grammar"; openReview(+a.dataset.g); });
+  alert(`${r.approved} items approved.`); loadReview();
 };
 async function openReview(id) {
   rSel = id; $$("#r-list li").forEach(li => li.classList.toggle("on", +li.dataset.id === id));
   const kind = $("#r-kind").value, box = $("#r-detail");
   if (kind === "vocab") {
-    const d = await api("/admin/vocab/" + id), it = d.item;
+    const it = (await api("/admin/vocab/" + id)).item;
     box.innerHTML = `<h3>${h(it.headword)}</h3><p class="muted">${h(it.level)} · unit ${h(it.unit ?? "?")} · glossary PDF p.${h(it.pdf_page ?? "?")} · ${h(it.status)}</p>
-    <div class="rform"><label>Headword<input id="f-headword" value="${h(it.headword)}"></label><label>Uzbek (book)<input id="f-meaning_uz" value="${h(it.meaning_uz || "")}"></label>
-    <label>English<input id="f-meaning_en" value="${h(it.meaning_en || "")}"></label><label>Part of speech<input id="f-pos" value="${h(it.pos || "")}"></label></div>
-    <details><summary class="lbl">Original line(s)</summary><pre class="pre">${h(it.raw_text || "")}</pre></details>
+    <div class="rform"><label>Headword<input id="f-headword" value="${h(it.headword)}"></label><label>English meaning (optional)<input id="f-meaning_en" value="${h(it.meaning_en || "")}"></label>
+    <label>Level<input id="f-level" value="${h(it.level || "")}"></label><label>Unit<input id="f-unit" value="${h(it.unit ?? "")}"></label></div>
     <div class="row"><button id="rv-save" class="primary">Save &amp; approve</button> <button id="rv-del">Delete</button></div>`;
-    $("#rv-save").onclick = async () => { await api("/vocab/" + id, { method: "PATCH", body: { headword: $("#f-headword").value, meaning_uz: $("#f-meaning_uz").value, meaning_en: $("#f-meaning_en").value, pos: $("#f-pos").value, status: "verified" } }); loadReview(); box.innerHTML = `<p class="muted">Saved.</p>`; };
+    $("#rv-save").onclick = async () => { await api("/vocab/" + id, { method: "PATCH", body: { headword: $("#f-headword").value, meaning_en: $("#f-meaning_en").value || null, level: $("#f-level").value || null, unit: $("#f-unit").value ? +$("#f-unit").value : null, status: "verified" } }); loadReview(); box.innerHTML = `<p class="muted">Saved.</p>`; };
     $("#rv-del").onclick = async () => { if (confirm("Delete this entry?")) { await api("/vocab/" + id, { method: "DELETE" }); loadReview(); box.innerHTML = ""; } };
     return;
   }
   const d = await api("/admin/grammar/" + id), it = d.item;
   const fld = (k, label, wide, area) => `<label class="${wide ? "wide" : ""}">${label}${area ? `<textarea id="f-${k}" rows="4">${h(it[k] || "")}</textarea>` : `<input id="f-${k}" value="${h(it[k] ?? "")}">`}</label>`;
   const img = (pg, cap) => pg && pg.image_url ? `<figure><a href="${pg.image_url}" target="_blank"><img loading="lazy" src="${pg.image_url}" alt=""></a><figcaption>${h(cap)} (PDF p.${pg.pdf_page})</figcaption></figure>` : "";
-  box.innerHTML = `<h3>${h(it.pattern)}</h3><p class="muted">${h(it.level)} · unit ${h(it.unit ?? "?")} · book p.${h(it.page ?? "?")} · ${h(it.status)} · ${it.has_rule ? "auto-detectable" : "<b>not auto-detectable</b> (notation can't be compiled — fix the pattern)"}</p>
+  box.innerHTML = `<h3>${h(it.pattern)}</h3><p class="muted">${h(it.level)} · unit ${h(it.unit ?? "?")} · book p.${h(it.page ?? "?")} · ${h(it.status)}</p>
   <div class="pages">${img(d.book_page, "Student book – Grammar Extension")}${img(d.index_page, "Scanned grammar index")}</div>
-  <div class="rform">${fld("pattern", "Pattern (V/A/N+ notation)", true)}${fld("meaning_uz", "Uzbek gloss (book)")}${fld("meaning_en", "English meaning")}${fld("level", "Level")}${fld("unit", "Unit")}${fld("page", "Book page")}
+  <div class="rform">${fld("pattern", "Pattern (V/A/N+ notation)", true)}${fld("meaning_en", "English meaning (optional)")}${fld("level", "Level")}${fld("unit", "Unit")}${fld("page", "Book page")}
   ${fld("explanation_original", "Original textbook explanation (verbatim)", true, true)}${fld("formation", "Formation (verbatim)", true, true)}${fld("notes", "Notes", true, true)}</div>
   <div class="row"><b>Examples</b> <span class="muted">(only genuine examples of this pattern should stay)</span><div id="ex-list">${it.examples.map(e => `<div class="ex-row"><span>${h(e.sentence)}</span><button data-e="${e.id}">✕</button></div>`).join("") || `<div class="empty">none</div>`}</div>
   <input id="ex-new" placeholder="Add example sentence…"><button id="ex-add">Add</button></div>
-  <details><summary class="lbl">Raw OCR text of the index entry</summary><pre class="pre">${h(it.raw_text || "")}</pre></details>
   <div class="row"><button id="rg-save" class="primary">Save &amp; approve</button> <button id="rg-save-only">Save (keep needs_review)</button> <button id="rg-del">Delete</button>
   <input id="mg-id" placeholder="merge into item #id" style="width:150px"><button id="mg-go">Merge</button></div><p id="rg-msg" class="muted"></p>`;
-  const body = approve => { const v = {}; for (const k of ["pattern", "meaning_uz", "meaning_en", "level", "unit", "page", "explanation_original", "formation", "notes"]) { const x = $("#f-" + k).value; v[k] = ["unit", "page"].includes(k) ? (x ? +x : null) : (x || null); } v.status = approve ? "verified" : "needs_review"; return v; };
-  const save = async approve => { const r = await api("/grammar/" + id, { method: "PATCH", body: body(approve) }); $("#rg-msg").textContent = "Saved." + (r.compiled === false ? " ⚠ notation still can't be compiled." : ""); loadReview(); };
+  const body = approve => { const v = {}; for (const k of ["pattern", "meaning_en", "level", "unit", "page", "explanation_original", "formation", "notes"]) { const x = $("#f-" + k).value; v[k] = ["unit", "page"].includes(k) ? (x ? +x : null) : (x || null); } v.status = approve ? "verified" : "needs_review"; return v; };
+  const save = async approve => { await api("/grammar/" + id, { method: "PATCH", body: body(approve) }); $("#rg-msg").textContent = "Saved."; loadReview(); };
   $("#rg-save").onclick = () => save(true); $("#rg-save-only").onclick = () => save(false);
   $("#rg-del").onclick = async () => { if (confirm("Delete this grammar item?")) { await api("/grammar/" + id, { method: "DELETE" }); loadReview(); box.innerHTML = `<p class="muted">Deleted.</p>`; } };
   $("#mg-go").onclick = async () => { const to = +$("#mg-id").value; if (to && confirm(`Merge into #${to}? This item is deleted and its examples move over.`)) { await api("/admin/grammar/merge", { method: "POST", body: { from_id: id, into_id: to } }); loadReview(); openReview(to); } };
@@ -409,15 +434,47 @@ async function openReview(id) {
   $$("#ex-list button[data-e]").forEach(b => b.onclick = async () => { await api("/admin/grammar-examples/" + b.dataset.e, { method: "DELETE" }); openReview(id); });
 }
 
-function applyMode() {
-  document.body.classList.toggle("ro", RO);
-  if (!RO) return;
-  $('#tabs button[data-tab="review"]').remove(); $("#tab-review").remove();
-  $("#ro-banner").hidden = false;
+/* =====================================================================================================
+   SAVED + STATUS
+   ===================================================================================================== */
+const savedLabel = s => s.kind === "word" ? s.text : (s.item && s.item.headword) || "(deleted)";
+async function loadSaved() {
+  const r = await store.saved.list();
+  $("#s-table tbody").innerHTML = r.map(s => `<tr><td>${h(s.kind)}</td><td class="ko">${h(savedLabel(s).replace(/\([^)]*\)/g, ""))}</td><td>${h(s.item?.level || "")}</td><td class="ko">${h(s.sentence || "")}</td>
+    <td>${s.kind === "grammar" ? '<span class="muted">—</span>' : `<button class="mini" data-tr="${h(s.id)}">Translate</button><div class="trbox" id="st-${h(s.id)}"></div>`}</td><td><button data-d="${h(s.id)}">Remove</button></td></tr>`).join("") || `<tr><td colspan="6" class="muted">Nothing saved yet. Click a word in a story and press “Save”.</td></tr>`;
+  $$("#s-table button[data-tr]").forEach(b => b.onclick = () => {
+    const s = r.find(x => String(x.id) === b.dataset.tr);
+    gtRender($(`[id="st-${s.id}"]`), savedLabel(s).replace(/\([^)]*\)/g, ""), { roman: true }); b.hidden = true;
+  });
+  $$("#s-table button[data-d]").forEach(b => b.onclick = async () => { await store.saved.remove(b.dataset.d); loadSaved(); });
 }
+async function loadStatus() {
+  const o = await api("/overview");
+  $("#status-body").innerHTML = `<div class="kv"><span>Vocabulary entries</span><b>${o.vocab}</b><span>…flagged for review</span><b>${o.vocab_needs_review}</b>
+  <span>Grammar items</span><b>${o.grammar}</b><span>…with the book's original explanation</span><b>${o.grammar_with_explanation}</b><span>…still unreviewed (scan/OCR)</span><b>${o.grammar_needs_review}</b>
+  <span>Workbook exercises / scripts</span><b>${o.workbook_items}</b></div>
+  <h2>Imported sources</h2><ul>${o.sources.map(s => `<li>${h(s.filename)} — ${h(s.kind)} (${h(s.level || "")})</li>`).join("")}</ul>
+  <p class="muted">Translations come from Google Translate in your browser; nothing is translated or analysed on the server. Words are coloured only where a story marks them, or (for pasted text) where they match the textbook word list by simple rules.
+  Original grammar explanations exist only where a student book was imported (3B, 4A, 4B); other levels have just the pattern. Everything read from a scan is "needs_review" until approved${RO ? "" : " in the Review tab"}.</p>`;
+}
+
+/* =====================================================================================================
+   BOOT
+   ===================================================================================================== */
 (async () => {
-  try { RO = !!(await api("/config")).read_only; } catch { /* old server: stay writable */ }
-  applyMode();
+  try { RO = !!(await api("/config")).read_only; } catch { /* old server: stay editable */ }
+  document.body.classList.toggle("ro", RO);
+  if (RO) { $('#tabs button[data-tab="review"]').remove(); $("#tab-review").remove(); $("#ro-banner").hidden = false; }
+  store.onChange = () => {                         // signed in or out: show that backend's data
+    cur = null; lastPanel = null; $("#text").innerHTML = ""; $("#p-title").textContent = "Pick a story or paste a text";
+    for (const b of ["#btn-edit", "#btn-delete", "#btn-read"]) $(b).hidden = true;
+    for (const s of ["#questions", "#story-box", "#legend"]) $(s).hidden = true;
+    if (typeof onStoreChanged === "function") onStoreChanged();
+    loadPassages();
+    if (!$("#tab-stories").hidden) loadStories().catch(e => showError(e.message));
+  };
+  try { await store.init(); } catch (e) { showError("sync unavailable: " + e.message); }
+  loadPassages().catch(e => showError(e.message));
+  loadStories().catch(e => showError(e.message));
   try { if (!(await api("/overview")).workbook_items) { $('#tabs button[data-tab="workbook"]').remove(); $("#tab-workbook").remove(); } } catch { /* keep the tab */ }
-  loadPassages();
 })();

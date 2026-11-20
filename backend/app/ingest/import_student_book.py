@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from .. import config, db
-from ..services.pattern_compiler import compile_pattern, pattern_key
+from ..services.common import pattern_key
 from .sb_grammar_parser import Item, parse_ocr_dir
 
 SLOT_PREFIX = re.compile(r"[AVN](?:/[AVN])*\s*[+=-]")
@@ -78,16 +78,14 @@ def store(conn, pdf_name: str, level: str, ocr_dir: Path, items: list[Item], sha
     index_rows = conn.execute(
         "SELECT id, pattern FROM grammar_item WHERE level=? AND entry_no IS NOT NULL", (level,)).fetchall()   # entry_no => came from the scanned index
     joined = assign(items, index_rows)
-    stats = {"items": len(items), "joined": 0, "new": 0, "merged_index_fragments": 0, "kept_corrected": 0, "with_rule": 0, "with_examples": 0}
+    stats = {"items": len(items), "joined": 0, "new": 0, "merged_index_fragments": 0, "kept_corrected": 0, "with_examples": 0}
     gid_of: dict[int, int] = {}
     for i, it in enumerate(items):
-        rule = compile_pattern(it.rule_pattern)
-        stats["with_rule"] += rule is not None
         stats["with_examples"] += bool(it.examples)
         explanation = "\n".join(it.meaning_lines) or None
         formation = "\n".join(it.formation_lines) or None
         notes = "\n".join(it.note_lines) or None
-        vals = dict(pattern=it.pattern, pattern_key=pattern_key(it.pattern), rule_json=json.dumps(rule, ensure_ascii=False) if rule else None,
+        vals = dict(pattern=it.pattern, pattern_key=pattern_key(it.pattern),
                     explanation_original=explanation, formation=formation, notes=notes, level=level, unit=it.unit, page=it.lesson_page,
                     pdf_page=it.appendix_pdf_page, source_id=sid)
         gid = joined.get(i)
@@ -120,11 +118,6 @@ def store(conn, pdf_name: str, level: str, ocr_dir: Path, items: list[Item], sha
         frag = conn.execute("SELECT * FROM grammar_item WHERE id=?", (r["id"],)).fetchone()
         if frag["corrected"]:
             continue
-        tgt = conn.execute("SELECT meaning_uz, raw_text FROM grammar_item WHERE id=?", (gid_of[i],)).fetchone()
-        uz = [x for x in (tgt["meaning_uz"], frag["meaning_uz"]) if x]
-        uz = " | ".join(dict.fromkeys(uz)) or None
-        raw = "\n".join(x for x in (tgt["raw_text"], f"[merged index entry {frag['entry_no']}] {frag['raw_text']}") if x)
-        conn.execute("UPDATE grammar_item SET meaning_uz=?, raw_text=? WHERE id=?", (uz, raw, gid_of[i]))
         conn.execute("DELETE FROM grammar_item WHERE id=?", (r["id"],))
         stats["merged_index_fragments"] += 1
     db.bump(conn, "rules_version")

@@ -10,11 +10,11 @@ Current production URL: **https://korean-reading-beta.vercel.app** (Vercel proje
 | Database | `data/app.sqlite` (read/write) | `deploy/app.sqlite`, bundled and opened **read-only** |
 | Passages, saved words, study progress | stored in the database | stored in **each visitor's browser** (`localStorage`) |
 | Editing, Review tab, imports, admin | yes | **no** (every write/admin endpoint returns 403) |
-| Kiwi analysis | local | runs inside the Vercel function (about 6 s on the first request after idle) |
-| Workbook exercises and listening scripts | yes | **not included** unless you opt in (section 5) |
+| Translation | Google Translate, requested by the visitor's browser | same (the server never calls Google) |
+| Workbook exercises and listening scripts | yes | **included** (section 5) |
 | Raw OCR text, page images, PDFs | yes | **never** deployed |
 
-The deployed database is a slim copy built by `scripts/build_deploy_db.py`. It keeps the vocabulary, grammar items and examples, and removes saved words, passages, study progress and OCR pages.
+The deployed database is a slim copy built by `scripts/build_deploy_db.py`. It keeps the Korean vocabulary (headword, level, unit), grammar items, examples and workbook, and removes the Uzbek meanings, raw OCR columns, OCR pages and any personal tables.
 
 **Why read-only:** Vercel functions cannot keep a writable SQLite file between requests, so nothing the server stores would survive. Vercel always runs the app in read-only mode (it sets the `VERCEL` environment variable); no configuration is needed for that.
 
@@ -33,8 +33,9 @@ Files that make the deployment work (already in the repo):
 | `vercel.json` | function settings (60 s max duration, excluded files) |
 | `.vercelignore` | what is **not** uploaded (`.venv`, `data`, PDFs, tests, `.env*`, …) |
 | `.python-version` | Python 3.12 |
-| `requirements.txt` | runtime-only dependencies (`fastapi`, `kiwipiepy`). Dev tools live in `requirements-dev.txt` |
+| `requirements.txt` | runtime-only dependency (`fastapi`). Dev tools live in `requirements-dev.txt` |
 | `public/` | the web page; Vercel serves it from its CDN |
+| `content/stories/` | the reading stories (bundled into the function; served through `/api/stories`) |
 
 ## 3. First deployment
 
@@ -43,7 +44,7 @@ Run from the project folder:
 ```bash
 # 1. Build the slim read-only database
 .venv/bin/python scripts/build_deploy_db.py
-#    (add --include-workbook only if you decided to publish workbook text, see section 5)
+#    (the books' content incl. workbook exercises ships by default; --exclude-workbook leaves the workbook out)
 
 # 2. Create/link the project. The name must be lowercase.
 npx vercel@latest link --yes --project korean-reading
@@ -63,11 +64,17 @@ The last command prints the production URL. A brand-new project's first deployme
 
 So keep the GitHub integration **disconnected** (step 3 above) and always deploy with the CLI. If you ever see a Vercel build triggered by a push, run `npx vercel@latest git disconnect --yes` again.
 
-## 5. Choosing what to publish
+## 5. What is published
 
-- **Default (recommended):** vocabulary + grammar + examples. The Workbook tab is hidden automatically when there is no workbook data.
-- **Add workbook exercises and listening scripts:** `build_deploy_db.py --include-workbook` (database grows from about 1.5 MB to 2.4 MB). This publishes a lot of verbatim textbook text, so decide deliberately.
-- **Copyright:** the deployed data is extracted from your textbooks, and the production URL is open to anyone who has the link. Only publish what you are comfortable making public.
+The site exists to make your books usable. It ships the **15 reading stories** (`content/stories/`, written for this app) and a database that contains everything extracted from your books: vocabulary, grammar items with their original explanations and examples, and the **workbook exercises and listening scripts** (Workbook tab, exercises under each grammar item, Workbook practice in the Study tab).
+
+- Not published: the PDFs, page images, raw OCR text, the Uzbek glosses, and anything personal (saved words, passages, study progress).
+- `build_deploy_db.py --exclude-workbook` leaves the bulk workbook text out if you ever want a lighter edition.
+- **Copyright:** this is verbatim text from the books, readable by anyone with the link. You decided to publish it; if that changes, use `--exclude-workbook`, enable Vercel Authentication (section 8), or take the site down (section 9).
+
+## 5b. Visitors' data in the cloud (optional)
+
+By default each visitor's passages and progress live in their own browser. To let people sign in with Google and have that data stored in their own private Firestore space, follow **[FIREBASE.md](FIREBASE.md)**. It needs a Firebase project, a config pasted into `public/firebase-config.js`, the security rules deployed, and a redeploy.
 
 ## 6. Updating the live site
 
@@ -87,15 +94,16 @@ Visitors' passages and study progress live in their own browsers, so redeploying
 
 ```bash
 U=https://korean-reading-beta.vercel.app
-npx vercel@latest curl /api/config   --deployment $U          # expect {"read_only":true,"max_chars":8000}
+npx vercel@latest curl /api/config   --deployment $U          # expect {"read_only":true}
 npx vercel@latest curl /api/overview --deployment $U          # expect your vocabulary/grammar counts
-npx vercel@latest curl /api/analyze  --deployment $U -- -s -X POST \
-  -H 'Content-Type: application/json' -d '{"text":"갈 수 있어요."}'      # expect matches (first call can take ~6 s)
-npx vercel@latest curl /api/passages --deployment $U -- -s -X POST \
-  -H 'Content-Type: application/json' -d '{"text":"x"}'               # expect 403 "read-only"
+npx vercel@latest curl /api/stories  --deployment $U          # expect 15 stories
+npx vercel@latest curl /api/vocab/lookup --deployment $U -- -s -X POST \
+  -H 'Content-Type: application/json' -d '{"tokens":["영화를"]}'      # expect a match
+npx vercel@latest curl /api/vocab --deployment $U -- -s -X POST \
+  -H 'Content-Type: application/json' -d '{"headword":"x"}'           # expect 403 "read-only"
 ```
 
-Then open the site in a browser and check: paste a passage and analyse it, click a highlighted word and grammar structure, save a word, and open the Study tab.
+Then open the site in a browser and check: open a story, click a coloured word and a grammar span (the panel should show a Google translation), switch the language menu, save a word, and open the Study tab. If the translation shows an error line, Google rate-limited you; the link below it still works.
 
 ## 8. Who can open it, and how to change that
 
@@ -116,9 +124,8 @@ To delete the project completely, use the dashboard (Project → Settings → De
 
 ## 10. Limits and costs
 
-- Function bundle: about 150 MB (Kiwi model 104 MB + libraries), well under the 500 MB limit.
-- Each analysis is capped at **8,000 characters**; `/api/analyze` has no per-visitor rate limit beyond that, so heavy public traffic means more function time on your Vercel plan. Check usage in the dashboard.
-- Cold start: the first request after the function has been idle loads the Kiwi model (about 6 s). Later requests are fast.
+- Function bundle: a few MB (FastAPI, the 1.7 MB database and the stories), so cold starts are short.
+- The server does no heavy work (database reads, the small stateless lookup and scheduling calls). Google Translate load is carried by each visitor's browser, not by your plan.
 - Maximum function duration is set to 60 s in `vercel.json`.
 
 ## 11. Troubleshooting
@@ -129,15 +136,16 @@ To delete the project completely, use the dashboard (Project → Settings → De
 | Every API call returns 500 after a Git-triggered deploy | The database is not in Git. Disconnect Git (`git disconnect`) and deploy from your machine. |
 | `read-only database not found … build_deploy_db.py` | Run `build_deploy_db.py` before deploying. |
 | Deploy says FastAPI needs a newer CLI | Use `npx vercel@latest`, not an old global `vercel`. |
-| First request is slow or times out | Cold start (section 10). Retry; check `npx vercel@latest logs`. |
-| Workbook tab missing on the live site | Expected: workbook data is excluded by default (section 5). |
+| First request is slow or times out | Cold start. Retry; check `npx vercel@latest logs`. |
+| Panel says it couldn't reach Google Translate | The unofficial endpoint was blocked or rate-limited for that visitor; it is requested by the browser, not by your server. The panel links to translate.google.com. |
+| Workbook tab missing on the live site | The deployed database was built with `--exclude-workbook`, or not rebuilt. Run `build_deploy_db.py` and redeploy. |
 | Browser shows old passages/progress | They are stored per browser; clearing site data in that browser removes them. |
 | Changes made locally don't appear online | You must rebuild the DB and redeploy (section 6); the live site never reads your local `data/`. |
 
 ## 12. Checklist before announcing the link
 
 - [ ] `pytest` passes and you rebuilt `deploy/app.sqlite` from the latest data
-- [ ] You decided on workbook publishing (section 5) and the copyright question
+- [ ] You are comfortable publishing the books' content, including the workbook (section 5)
 - [ ] `vercel curl` checks in section 7 behave as described
 - [ ] The GitHub integration is disconnected
 - [ ] You know how to roll back or take the site down (section 9)

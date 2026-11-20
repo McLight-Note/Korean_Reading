@@ -1,6 +1,9 @@
-"""Regressions for bugs found in the expert review / audit. Each test fails on the old behaviour."""
+"""Regressions for bugs found in review (paging limits, input validation, importer guards, deploy builder) plus the
+removal of the Uzbek glosses. Each test fails on the old behaviour."""
+import importlib.util
 import json
-import random
+import sqlite3
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +12,6 @@ from backend.app import config, db
 from backend.app.ingest import import_student_book as isb
 from backend.app.ingest import import_workbook as iw
 from backend.app.main import app
-from backend.app.services import exercises, sentence_analyzer as sa
 
 
 @pytest.fixture()
@@ -18,12 +20,11 @@ def client(tmp_path, monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
-@pytest.fixture()
-def conn(tmp_path):
-    c = db.connect(tmp_path / "c.sqlite")
-    db.init_db(c)
-    yield c
-    c.close()
+def load_script(name):
+    spec = importlib.util.spec_from_file_location(name, Path(config.ROOT) / "scripts" / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 # ---- paging: a negative limit must not mean "unlimited" ----
@@ -31,7 +32,6 @@ def test_negative_limit_cannot_dump_the_table(client):
     c = db.connect(); db.init_db(c)
     for i in range(130):
         c.execute("INSERT INTO workbook_item(level, section, instruction, body, pdf_page) VALUES ('3B','grammar',?,?,?)", (f"i{i}", "b", i))
-        c.execute("INSERT INTO vocab_entry(headword, meaning_uz, level, unit) VALUES (?,?,?,?)", (f"w{i}", "x", "1A", 1))
     for i in range(230):
         c.execute("INSERT INTO vocab_entry(headword, level, unit) VALUES (?,?,?)", (f"v{i}", "1A", 1))
     c.commit(); c.close()
@@ -48,9 +48,7 @@ def test_bad_enum_values_are_rejected_cleanly(client):
     gid = client.post("/api/grammar", json={"pattern": "V+고 말다"}).json()["id"]
     assert client.patch(f"/api/vocab/{vid}", json={"status": "bogus"}).status_code == 422
     assert client.patch(f"/api/grammar/{gid}", json={"status": "bogus"}).status_code == 422
-    assert client.post("/api/saved", json={"kind": "x", "ref_id": 1}).status_code == 422
     assert client.post("/api/admin/approve", json={"kind": "x", "ids": [1]}).status_code == 422
-    assert client.patch("/api/matches/1", json={"match_type": "WRONG"}).status_code == 422
     assert client.patch(f"/api/vocab/{vid}", json={"status": "verified"}).status_code == 200
 
 
@@ -63,31 +61,6 @@ def test_schedule_endpoint_validates_state(client):
     assert client.post("/api/study/schedule", json={"grade": 2, "today": "not-a-date"}).status_code == 400
 
 
-# ---- vocabulary exercises: few distinct meanings must not crash ----
-def test_vocab_mcq_with_too_few_distinct_meanings_returns_nothing(conn):
-    for hw in ("가", "나", "다", "라", "마"):
-        conn.execute("INSERT INTO vocab_entry(headword, meaning_uz, level, unit, status) VALUES (?,?,?,?,?)", (hw, "same gloss", "1A", 1, "verified"))
-    conn.execute("INSERT INTO vocab_entry(headword, meaning_uz, level, unit, status) VALUES ('바','other gloss','1A',1,'verified')")
-    assert exercises.vocab_mcq(conn, "1A", 5, random.Random(1)) == []          # used to raise ValueError -> 500
-
-
-# ---- offsets: JavaScript slices UTF-16, Python slices code points ----
-def test_offsets_are_utf16_so_emoji_do_not_shift_highlights(conn):
-    text = "😀 저는 어제 영화를 봤어요. 😀😀 비가 와요."
-    pid = sa.create_passage(conn, None, text)
-    a = sa.load_analysis(conn, pid)
-    u16 = a["text"].encode("utf-16-le")
-    assert a["matches"]
-    for m in a["matches"]:
-        assert u16[2 * m["start"]:2 * m["end"]].decode("utf-16-le") == m["surface"]      # exactly what JS .slice(start, end) returns
-    for s in a["sentences"]:
-        assert u16[2 * s["start"]:2 * s["end"]].decode("utf-16-le").strip()
-    eph = sa.analyze_ephemeral(conn, None, text)
-    eu = eph["text"].encode("utf-16-le")
-    for m in eph["matches"]:
-        assert eu[2 * m["start"]:2 * m["end"]].decode("utf-16-le") == m["surface"]
-
-
 # ---- importers must not record an empty import ----
 def test_importers_refuse_missing_or_empty_ocr(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "i.sqlite")
@@ -95,8 +68,7 @@ def test_importers_refuse_missing_or_empty_ocr(tmp_path, monkeypatch):
     for mod in (iw, isb):
         with pytest.raises(SystemExit):
             mod.main(["Z9 WB.pdf"])
-    empty = tmp_path / "ocr" / "Z9_WB"
-    empty.mkdir(parents=True)
+    (tmp_path / "ocr" / "Z9_WB").mkdir(parents=True)
     with pytest.raises(SystemExit):
         iw.main(["Z9 WB.pdf"])
     c = db.connect(); db.init_db(c)
@@ -112,36 +84,78 @@ def test_read_only_without_database_is_a_clear_error(tmp_path, monkeypatch):
         db.connect()
 
 
-# ---- deploy DB builder: works on an OLD database and never ships personal data ----
-def test_build_deploy_db_upgrades_old_schema_and_strips_personal_data(tmp_path):
-    import importlib.util
-    import sqlite3
-    from pathlib import Path
-    spec = importlib.util.spec_from_file_location("build_deploy_db", Path(config.ROOT) / "scripts" / "build_deploy_db.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+# ---- the Uzbek glosses are gone from every public response ----
+def test_api_never_serves_uzbek_fields(client):
+    c = db.connect(); db.init_db(c)
+    c.execute("INSERT INTO vocab_entry(headword, meaning_uz, raw_text, pos, level, unit) VALUES ('차','mashina','차 mashina','noun','1A',1)")
+    c.execute("INSERT INTO grammar_item(pattern, meaning_uz, raw_text, rule_json, level) VALUES ('V+고 있다','ayotgan','x','{}','3B')")
+    c.commit(); c.close()
+    for url in ("/api/vocab", "/api/vocab/1", "/api/grammar", "/api/grammar/1", "/api/admin/vocab/1", "/api/admin/grammar/1"):
+        body = json.dumps(client.get(url).json(), ensure_ascii=False)
+        assert "mashina" not in body and "ayotgan" not in body and "meaning_uz" not in body and "rule_json" not in body, url
 
+
+def test_importers_do_not_store_glosses(tmp_path):
+    from backend.app.ingest import import_glossary
+    from backend.app.ingest.glossary_parser import Entry
+    conn = db.connect(tmp_path / "g.sqlite"); db.init_db(conn)
+    sid = conn.execute("INSERT INTO source(filename, kind) VALUES ('g.pdf','glossary')").lastrowid
+    import_glossary.import_entries(conn, [Entry("차", "mashina", "1A", 1, None, 5, 3, ["차 mashina"])], sid)
+    row = conn.execute("SELECT * FROM vocab_entry").fetchone()
+    assert row["headword"] == "차" and row["level"] == "1A" and row["meaning_uz"] is None and row["raw_text"] is None
+
+
+# ---- deploy DB builder: works on an OLD database, strips glosses and personal tables ----
+def test_build_deploy_db_scrubs_uzbek_and_legacy_tables(tmp_path):
+    mod = load_script("build_deploy_db")
     src = tmp_path / "old.sqlite"
-    c = sqlite3.connect(src)                      # an "old" DB: only the early tables, no workbook_item / study_state
+    c = sqlite3.connect(src)
     c.executescript("""
-        CREATE TABLE vocab_entry(id INTEGER PRIMARY KEY, headword TEXT, meaning_uz TEXT, status TEXT DEFAULT 'verified');
+        CREATE TABLE vocab_entry(id INTEGER PRIMARY KEY, headword TEXT, meaning_uz TEXT, raw_text TEXT, pos TEXT, level TEXT, status TEXT DEFAULT 'verified');
         CREATE TABLE vocab_key(entry_id INTEGER, key TEXT);
-        CREATE TABLE grammar_item(id INTEGER PRIMARY KEY, pattern TEXT, level TEXT, status TEXT DEFAULT 'needs_review');
+        CREATE TABLE grammar_item(id INTEGER PRIMARY KEY, pattern TEXT, meaning_uz TEXT, raw_text TEXT, rule_json TEXT, level TEXT, status TEXT DEFAULT 'needs_review');
         CREATE TABLE grammar_example(id INTEGER PRIMARY KEY, grammar_id INTEGER, sentence TEXT, source_ref TEXT);
         CREATE TABLE passage(id INTEGER PRIMARY KEY, text_norm TEXT);
         CREATE TABLE saved_item(id INTEGER PRIMARY KEY, kind TEXT, ref_id INTEGER);
-        INSERT INTO vocab_entry(headword, meaning_uz) VALUES ('사과','olma');
-        INSERT INTO passage(text_norm) VALUES ('my private passage');
-        INSERT INTO saved_item(kind, ref_id) VALUES ('vocab', 1);
+        INSERT INTO vocab_entry(headword, meaning_uz, raw_text, pos, level) VALUES ('사과','olma','사과 olma','noun','1A');
+        INSERT INTO grammar_item(pattern, meaning_uz, raw_text, rule_json, level) VALUES ('V+지만','ekin','x','{}','3A');
+        INSERT INTO passage(text_norm) VALUES ('private passage');
     """)
     c.commit(); c.close()
-
     counts = mod.build(src, tmp_path / "out" / "deploy.sqlite")
-    assert counts["vocab_entry"] == 1 and counts["workbook_item"] == 0
+    assert counts["vocab_entry"] == 1 and counts["grammar_item"] == 1
     out = sqlite3.connect(tmp_path / "out" / "deploy.sqlite")
-    assert out.execute("SELECT COUNT(*) FROM passage").fetchone()[0] == 0
-    assert out.execute("SELECT COUNT(*) FROM saved_item").fetchone()[0] == 0
-    assert out.execute("SELECT COUNT(*) FROM study_state").fetchone()[0] == 0          # table exists (was added) and is empty
+    dumped = "\n".join(out.iterdump())
+    for leaked in ("olma", "ekin", "private passage"):
+        assert leaked not in dumped
+    tables = {r[0] for r in out.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert not ({"passage", "saved_item", "vocab_key"} & tables)
     assert not (tmp_path / "out" / "deploy.tmp").exists()
     with pytest.raises(FileNotFoundError):
         mod.build(tmp_path / "nope.sqlite", tmp_path / "x.sqlite")
+
+
+def test_deploy_db_keeps_workbook_by_default_and_can_drop_it(tmp_path):
+    mod = load_script("build_deploy_db")
+    src = tmp_path / "s.sqlite"
+    c = db.connect(src); db.init_db(c)
+    c.execute("INSERT INTO workbook_item(level, section, instruction, body, pdf_page) VALUES ('3B','grammar','i','b',1)")
+    c.commit(); c.close()
+    assert mod.build(src, tmp_path / "a.sqlite")["workbook_item"] == 1
+    assert mod.build(src, tmp_path / "b.sqlite", include_workbook=False)["workbook_item"] == 0
+
+
+def test_drop_uzbek_maintenance_backs_up_and_clears(tmp_path):
+    mod = load_script("maintenance")
+    path = tmp_path / "app.sqlite"
+    c = db.connect(path); db.init_db(c)
+    sid = c.execute("INSERT INTO source(filename, kind) VALUES ('g.pdf','glossary')").lastrowid
+    c.execute("INSERT INTO vocab_entry(headword, meaning_uz, raw_text, level) VALUES ('차','mashina','차 mashina','1A')")
+    c.execute("INSERT INTO ocr_page(source_id, pdf_page, text, lines_json) VALUES (?,?,?,?)", (sid, 1, "차 mashina", "[]"))
+    c.commit(); c.close()
+    r = mod.drop_uzbek(path)
+    assert r["remaining"] == {"vocab_with_uzbek": 0, "grammar_with_uzbek": 0}
+    assert (tmp_path / "app.sqlite.before-uzbek-removal").exists()                 # nothing is lost
+    out = sqlite3.connect(path)
+    assert out.execute("SELECT headword FROM vocab_entry").fetchone()[0] == "차"
+    assert out.execute("SELECT text FROM ocr_page").fetchone()[0] is None

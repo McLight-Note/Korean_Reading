@@ -1,16 +1,15 @@
-"""Review queue / manual-correction API (the human-in-the-loop for OCR'd textbook data)."""
-import json
-
-from fastapi import APIRouter, HTTPException
+"""Review queue / manual-correction API (the human-in-the-loop for OCR'd textbook data). Local use only."""
 from typing import Literal
 
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import db
 from ..deps import Conn, clamp_page
-from ..services import calibration
 
 router = APIRouter(prefix="/api/admin")
+HIDDEN_GRAMMAR = ("meaning_uz", "raw_text", "rule_json", "pattern_key")
+HIDDEN_VOCAB = ("meaning_uz", "meaning_ko", "raw_text", "pos", "pos_source")
 
 
 class ApproveIn(BaseModel):
@@ -34,16 +33,14 @@ class ExampleIn(BaseModel):
 def _page(conn, source_id, pdf_page):
     if not source_id or not pdf_page:
         return None
-    r = conn.execute("SELECT source_id, pdf_page, text, image_path FROM ocr_page WHERE source_id=? AND pdf_page=?", (source_id, pdf_page)).fetchone()
+    r = conn.execute("SELECT source_id, pdf_page, image_path FROM ocr_page WHERE source_id=? AND pdf_page=?", (source_id, pdf_page)).fetchone()
     if not r:
         return None
-    d = dict(r)
-    d["image_url"] = f"/ocr/{d.pop('image_path')}" if d["image_path"] else None
-    return d
+    return {"source_id": r["source_id"], "pdf_page": r["pdf_page"], "image_url": f"/ocr/{r['image_path']}" if r["image_path"] else None}
 
 
 @router.get("/queue")
-def queue(kind: str = "grammar", status: str = "needs_review", level: str = "", q: str = "", has_explanation: str = "", compiled: str = "",
+def queue(kind: str = "grammar", status: str = "needs_review", level: str = "", q: str = "", has_explanation: str = "",
           limit: int = 60, offset: int = 0, conn=Conn):
     table = "grammar_item" if kind == "grammar" else "vocab_entry"
     label = "pattern" if kind == "grammar" else "headword"
@@ -53,15 +50,13 @@ def queue(kind: str = "grammar", status: str = "needs_review", level: str = "", 
     if level:
         where.append("level=?"); vals.append(level)
     if q:
-        where.append(f"({label} LIKE ? OR meaning_uz LIKE ?)"); vals += [f"%{q}%"] * 2
+        where.append(f"({label} LIKE ?)"); vals.append(f"%{q}%")
     if kind == "grammar" and has_explanation in ("yes", "no"):
         where.append("explanation_original IS NOT NULL" if has_explanation == "yes" else "explanation_original IS NULL")
-    if kind == "grammar" and compiled in ("yes", "no"):
-        where.append("rule_json IS NOT NULL" if compiled == "yes" else "rule_json IS NULL")
     w = ("WHERE " + " AND ".join(where)) if where else ""
     total = conn.execute(f"SELECT COUNT(*) FROM {table} {w}", vals).fetchone()[0]
-    cols = "id, pattern AS label, level, unit, page, status, entry_no, meaning_uz, (explanation_original IS NOT NULL) AS has_expl, (rule_json IS NOT NULL) AS has_rule" if kind == "grammar" \
-        else "id, headword AS label, level, unit, status, meaning_uz, pdf_page"
+    cols = ("id, pattern AS label, level, unit, page, status, entry_no, (explanation_original IS NOT NULL) AS has_expl" if kind == "grammar"
+            else "id, headword AS label, level, unit, status, pdf_page")
     order = "level, CAST(entry_no AS REAL), id" if kind == "grammar" else "level, unit, id"
     rows = conn.execute(f"SELECT {cols} FROM {table} {w} ORDER BY {order} LIMIT ? OFFSET ?", (*vals, *clamp_page(limit, offset, 200))).fetchall()
     return {"total": total, "items": [dict(r) for r in rows]}
@@ -73,7 +68,8 @@ def grammar_review(gid: int, conn=Conn):
     if not r:
         raise HTTPException(404)
     d = dict(r)
-    d["has_rule"] = d.pop("rule_json") is not None
+    for k in HIDDEN_GRAMMAR:
+        d.pop(k, None)
     d["examples"] = [dict(x) for x in conn.execute("SELECT id, sentence, source_ref FROM grammar_example WHERE grammar_id=?", (gid,))]
     idx = conn.execute("SELECT id FROM source WHERE kind='grammar_index'").fetchone()
     return {"item": d, "book_page": _page(conn, d["source_id"], d["pdf_page"]) if d["explanation_original"] else None,
@@ -86,8 +82,9 @@ def vocab_review(vid: int, conn=Conn):
     if not r:
         raise HTTPException(404)
     d = dict(r)
-    pg = conn.execute("SELECT text FROM ocr_page WHERE source_id=? AND pdf_page=?", (d["source_id"], d["pdf_page"])).fetchone()
-    return {"item": d, "page_text": pg["text"] if pg else None}
+    for k in HIDDEN_VOCAB:
+        d.pop(k, None)
+    return {"item": d}
 
 
 @router.post("/approve")
@@ -112,14 +109,13 @@ def approve(body: ApproveIn, conn=Conn):
 
 @router.post("/grammar/merge")
 def merge(body: MergeIn, conn=Conn):
-    a = conn.execute("SELECT * FROM grammar_item WHERE id=?", (body.from_id,)).fetchone()
-    b = conn.execute("SELECT * FROM grammar_item WHERE id=?", (body.into_id,)).fetchone()
+    a = conn.execute("SELECT id FROM grammar_item WHERE id=?", (body.from_id,)).fetchone()
+    b = conn.execute("SELECT id FROM grammar_item WHERE id=?", (body.into_id,)).fetchone()
     if not a or not b or a["id"] == b["id"]:
         raise HTTPException(400, "two different existing items are required")
-    uz = " | ".join(dict.fromkeys(x for x in (b["meaning_uz"], a["meaning_uz"]) if x)) or None
     conn.execute("UPDATE grammar_example SET grammar_id=? WHERE grammar_id=?", (b["id"], a["id"]))
-    conn.execute("UPDATE grammar_item SET meaning_uz=?, corrected=1 WHERE id=?", (uz, b["id"]))
-    conn.execute("UPDATE analysis_match SET ref_id=? WHERE layer='grammar' AND ref_id=?", (b["id"], a["id"]))
+    conn.execute("UPDATE workbook_item SET grammar_id=? WHERE grammar_id=?", (b["id"], a["id"]))
+    conn.execute("UPDATE grammar_item SET corrected=1 WHERE id=?", (b["id"],))
     conn.execute("DELETE FROM grammar_item WHERE id=?", (a["id"],))
     db.bump(conn, "rules_version")
     return {"ok": True}
@@ -136,8 +132,3 @@ def delete_example(eid: int, conn=Conn):
     conn.execute("DELETE FROM grammar_example WHERE id=?", (eid,))
     db.bump(conn, "rules_version")
     return {"ok": True}
-
-
-@router.get("/calibration")
-def get_calibration(level: str = "", conn=Conn):
-    return calibration.run(conn, level or None)

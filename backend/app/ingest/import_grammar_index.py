@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from .. import config, db
-from ..services.pattern_compiler import compile_pattern, pattern_key
+from ..services.common import pattern_key
 from .grammar_index_parser import parse_ocr_dir
 
 SWIFT = Path(__file__).with_name("vision_ocr.swift")
@@ -38,22 +38,18 @@ def main(argv=None) -> int:
         sid = conn.execute("INSERT INTO source(filename, level, kind, sha256, note) VALUES (?,?,?,?,?)",
                            (pdf.name, "1A-4B", "grammar_index", hashlib.sha256(pdf.read_bytes()).hexdigest(),
                             "Scanned, handwriting-annotated pattern index with Uzbek glosses")).lastrowid
-        ok = 0
-        for it in items:
-            rule = compile_pattern(it.pattern)
-            ok += rule is not None
+        for it in items:                                   # pattern + level + page only; the Uzbek gloss is deliberately not stored
             conn.execute(
-                """INSERT INTO grammar_item(pattern, pattern_key, rule_json, meaning_uz, level, pdf_page, index_page, source_id,
-                       status, entry_no, raw_text) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (it.pattern, pattern_key(it.pattern), json.dumps(rule, ensure_ascii=False) if rule else None,
-                 it.gloss or None, it.level, it.pdf_page, it.pdf_page, sid, "needs_review", it.entry_no, it.raw))
+                """INSERT INTO grammar_item(pattern, pattern_key, level, pdf_page, index_page, source_id, status, entry_no)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (it.pattern, pattern_key(it.pattern), it.level, it.pdf_page, it.pdf_page, sid, "needs_review", it.entry_no))
         for jp in sorted(ocr_dir.glob("page_*.json")):          # raw pages + images for the review UI
             d = json.loads(jp.read_text(encoding="utf-8"))
             conn.execute("INSERT OR REPLACE INTO ocr_page(source_id, pdf_page, text, lines_json, image_path) VALUES (?,?,?,?,?)",
                          (sid, d["pdf_page"], "\n".join(l["text"] for l in d["lines"]), json.dumps(d["lines"], ensure_ascii=False),
                           f"{ocr_dir.name}/{jp.stem}.jpg"))
         db.bump(conn, "rules_version")
-    print(f"imported {len(items)} grammar index items; {ok} compiled into detection rules")
+    print(f"imported {len(items)} grammar index items")
     return 0
 
 
