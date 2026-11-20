@@ -178,7 +178,7 @@ Adding stories to the database is done by a script on your Mac, not by the websi
 
    ```bash
    mkdir -p secrets
-   mv ~/Downloads/korean-reading-firebase-adminsdk-fbsvc-16d31d62d5.json secrets/firebase-service-account.json
+   mv ~/Downloads/*firebase-adminsdk*.json secrets/firebase-service-account.json
    ```
 
    If that `mv` command says "No such file", find the downloaded file in Finder and drag it into the `secrets` folder, then rename it `firebase-service-account.json`.
