@@ -3,152 +3,57 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Korean Reading</title>
-<link rel="stylesheet" href="/styles.css">
+<title>서울대 Reader</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <header class="top">
-  <h1>서울대 Reader <small>read, click a word, see the translation</small></h1>
-  <span id="auth-box" class="auth" hidden></span>
+  <h1><a href="#/">서울대 Reader</a></h1>
+  <span class="spacer"></span>
   <label class="langbox" title="Language of the Google Translate results">Translate to <select id="lang"></select></label>
-  <nav id="tabs">
-    <button data-tab="stories" class="on">Stories</button>
-    <button data-tab="reader">Reader</button>
-    <button data-tab="study">Study</button>
-    <button data-tab="vocab">Vocabulary</button>
-    <button data-tab="grammar">Grammar</button>
-    <button data-tab="workbook">Workbook</button>
-    <button data-tab="review">Review</button>
-    <button data-tab="saved">Saved</button>
-    <button data-tab="status">Status</button>
-  </nav>
+  <span id="auth-box" class="auth" hidden></span>
 </header>
 
-<div id="err-banner" class="banner err" role="alert" hidden onclick="this.hidden = true"></div>
+<div id="banner" class="banner" role="alert" hidden></div>
+
 <main>
-<div id="ro-banner" class="banner" hidden>Public read-only edition. Your passages, saved words and progress stay in <b>this browser</b> (or in your own account if you sign in), never on a server. Translations come from Google Translate when you click a word.</div>
-
-<!-- STORIES -->
-<section id="tab-stories" class="tab">
-  <div class="filters">
-    <h2 style="margin:0 12px 0 0;font-size:18px">Reading stories</h2>
-    <select id="sf-level"><option value="">All levels</option><option>3A</option><option>3B</option><option>4A</option><option>4B</option></select>
-  </div>
-  <p class="muted">Short stories written to practise the grammar and vocabulary of your textbooks, one level at a time. Open one and click any word to see its translation.</p>
-  <div id="stories-list"></div>
-</section>
-
-<!-- READER -->
-<section id="tab-reader" class="tab" hidden>
-  <aside class="side">
-    <h2>Passages</h2>
-    <ul id="passage-list" class="plain"></ul>
-    <h2>New passage</h2>
-    <input id="new-title" placeholder="Title (optional)">
-    <textarea id="new-text" rows="8" placeholder="Paste Korean text…"></textarea>
-    <button id="btn-open" class="primary">Open to read</button>
-    <p class="muted" id="open-msg"></p>
-  </aside>
-  <article class="reader">
+  <section id="view-list">
     <div class="toolbar">
-      <strong id="p-title">Pick a story or paste a text</strong>
-      <span class="spacer"></span>
-      <button id="btn-read" hidden>Mark as read</button>
-      <button id="btn-edit" hidden>Edit text</button>
-      <button id="btn-delete" hidden>Delete</button>
+      <select id="f-level" aria-label="Level"><option value="">All levels</option></select>
+      <select id="f-status" aria-label="Read status">
+        <option value="">All stories</option><option value="unread">Not read yet</option><option value="read">Read</option>
+      </select>
+      <span id="progress" class="muted"></span>
     </div>
-    <div id="text" class="text" lang="ko"></div>
-    <div class="legend" id="legend" hidden></div>
-    <section id="story-box" class="qbox" hidden></section>
-    <section id="questions" class="qbox" hidden>
-      <h3>Comprehension questions <small class="muted">(written by you)</small></h3>
-      <ul id="q-list" class="plain"></ul>
-      <div class="qform"><input id="q-text" placeholder="Question…"><input id="q-ans" placeholder="Answer (optional)"><button id="q-add">Add</button></div>
-    </section>
-  </article>
-  <aside class="detail" id="detail"><p class="muted">Click any word. Its translation appears here.</p></aside>
-</section>
+    <div id="stories-list"><p class="muted">Loading stories…</p></div>
+  </section>
 
-<!-- STUDY -->
-<section id="tab-study" class="tab" hidden>
-  <div class="filters" id="st-nav"><button data-v="home" class="on">Overview</button><button data-v="cards">Flashcards</button></div>
-  <div id="st-body"></div>
-</section>
-
-<!-- VOCAB -->
-<section id="tab-vocab" class="tab" hidden>
-  <div class="filters">
-    <input id="v-q" placeholder="Search Korean word">
-    <select id="v-level"><option value="">All levels</option></select>
-    <select id="v-status"><option value="">Any status</option><option>verified</option><option>needs_review</option><option>manual</option></select>
-    <button id="v-add" class="edit-only">+ Add word</button>
-  </div>
-  <table class="grid" id="v-table"><thead><tr><th>Korean</th><th>Level</th><th>Unit</th><th>Translation (Google)</th><th>Status</th><th class="edit-only"></th></tr></thead><tbody></tbody></table>
-  <div class="pager"><button id="v-prev">‹</button> <span id="v-info"></span> <button id="v-next">›</button></div>
-  <p class="muted">The word list is taken from your textbooks' glossary (level and unit as printed). Click “Translate” on a row to ask Google.</p>
-</section>
-
-<!-- GRAMMAR -->
-<section id="tab-grammar" class="tab" hidden>
-  <div class="filters">
-    <input id="g-q" placeholder="Search pattern or explanation">
-    <select id="g-level"><option value="">All levels</option></select>
-    <select id="g-status"><option value="">Any status</option><option>verified</option><option>needs_review</option><option>manual</option></select>
-    <button id="g-add" class="edit-only">+ Add grammar</button>
-  </div>
-  <div class="gwrap">
-    <div>
-      <table class="grid" id="g-table"><thead><tr><th>Level</th><th>#</th><th>Pattern</th><th>Book</th><th>Status</th><th class="edit-only"></th></tr></thead><tbody></tbody></table>
-      <div class="pager"><button id="g-prev">‹</button> <span id="g-info"></span> <button id="g-next">›</button></div>
+  <section id="view-read" hidden>
+    <a class="back" href="#/">← All stories</a>
+    <div class="readgrid">
+      <article>
+        <div class="titlerow">
+          <h2 id="s-title"></h2>
+          <span id="s-level" class="chip"></span>
+          <span class="spacer"></span>
+          <button id="btn-read"></button>
+          <a id="btn-next" class="btnlink" href="#/" hidden>Next unread story →</a>
+        </div>
+        <div id="text" class="text" lang="ko"></div>
+        <div id="end-sentinel"></div>
+        <p class="legend"><span class="dot v"></span> word to learn <span class="dot g"></span> grammar to learn <span class="muted">· click any word for its translation</span></p>
+        <section id="below"></section>
+      </article>
+      <aside id="detail" class="detail"><p class="muted">Click any word. Its translation appears here.</p></aside>
     </div>
-    <aside class="detail" id="g-detail"><p class="muted">Pick a pattern to read the book's explanation and examples.</p></aside>
-  </div>
-</section>
-
-<!-- WORKBOOK -->
-<section id="tab-workbook" class="tab" hidden>
-  <div class="filters">
-    <select id="w-level"><option value="">All levels</option></select>
-    <select id="w-section"><option value="">All sections</option></select>
-    <input id="w-q" placeholder="Search exercise text / grammar heading">
-  </div>
-  <p class="muted">Workbook exercises exactly as OCR'd (unreviewed): blanks and answers are not filled in.</p>
-  <div id="w-list"></div>
-  <div class="pager"><button id="w-prev">‹</button> <span id="w-info"></span> <button id="w-next">›</button></div>
-</section>
-
-<!-- REVIEW (local editing only) -->
-<section id="tab-review" class="tab" hidden>
-  <div class="filters">
-    <select id="r-kind"><option value="grammar">Grammar</option><option value="vocab">Vocabulary</option></select>
-    <select id="r-level"><option value="">All levels</option></select>
-    <select id="r-status"><option value="needs_review">needs_review</option><option value="">any status</option><option value="verified">verified</option><option value="manual">manual</option></select>
-    <select id="r-expl"><option value="">Explanation: any</option><option value="yes">has explanation</option><option value="no">no explanation</option></select>
-    <input id="r-q" placeholder="Search">
-    <button id="r-bulk" title="Marks every listed level's unreviewed items that have a textbook explanation as verified">Approve level (with explanation)</button>
-  </div>
-  <div class="review">
-    <div><ul id="r-list" class="plain"></ul><div class="pager"><button id="r-prev">‹</button> <span id="r-info"></span> <button id="r-next">›</button></div></div>
-    <div id="r-detail"><p class="muted">Pick an item. Check it against the page image, fix it, then approve.</p></div>
-  </div>
-</section>
-
-<!-- SAVED -->
-<section id="tab-saved" class="tab" hidden>
-  <table class="grid" id="s-table"><thead><tr><th>Type</th><th>Item</th><th>Level</th><th>Context</th><th>Translation (Google)</th><th></th></tr></thead><tbody></tbody></table>
-</section>
-
-<!-- STATUS -->
-<section id="tab-status" class="tab" hidden><div id="status-body"></div></section>
+  </section>
 </main>
 
-<dialog id="dlg"><form method="dialog" id="dlg-form"></form></dialog>
-<script src="/studydocs.js"></script>
-<script src="/firebase-config.js"></script>
-<script src="/translate.js"></script>
-<script src="/store.js"></script>
-<script src="/app.js"></script>
-<script src="/study.js"></script>
-<script src="/stories.js"></script>
+<div id="toast" class="toast" hidden></div>
+
+<script src="core.js"></script>
+<script src="translate.js"></script>
+<script src="firebase-config.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

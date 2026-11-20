@@ -1,193 +1,378 @@
-# Korean Reading — read stories, click a word, see the translation
+# 서울대 Reader: Korean stories you read, click and translate
 
-A reading site built on your own 서울대 한국어 textbooks. It opens on **15 original reading stories** (levels 3A–4B) that practise the books' vocabulary and grammar. The words and grammar a story teaches are shown **in colour only** (green = word to learn, orange = grammar to learn). **Click any word** and the side panel shows its **Google Translate** translation, plus the matching glossary/grammar entry from your books when there is one.
+This website does one thing: **you read Korean stories.** Click any word and its translation appears on the side. The stories are stored in **Firebase** (Google's free cloud database). When you finish reading a story, it joins your **read list**. Whenever you want more stories, you ask Claude to write them and publish them, and they show up on your site straight away.
 
-```
-PDFs → local OCR / text extraction → SQLite (words, grammar, examples, workbook) → web reader + Google Translate in the browser
-```
+This guide takes you from **nothing installed** to **a working site**, written for a complete beginner. Copy the commands exactly, one step at a time.
 
-## What it does
+**What you will do**
 
-| Area | Notes |
-|---|---|
-| **Stories** (15, levels 3A–4B) | Written for this app, not textbook content. Targets are coloured; summary and comprehension questions under the text; "add all to flashcards". |
-| **Reader** | Paste any Korean text. Words found in your textbooks' word list are coloured green (approximate matching, see below). Every word is clickable. |
-| **Side panel** | Google translation of the word, of the highlighted phrase and of the whole sentence; the textbook entry (level, unit, examples) when it exists; a Save button. |
-| **Study** | Flashcards with spaced repetition (SM-2) from saved words or a level's word list/grammar; reading progress; your own comprehension questions. |
-| **Vocabulary / Grammar** | Browse and search the imported glossary (~5,800 words) and grammar (~290 patterns with explanations and ~670 examples from the student books 3B, 4A, 4B). |
-| **Workbook** | ~1,150 exercises and listening scripts from the workbooks 3A–4B (OCR draft; blanks stay blank, no answer key). |
-| **Review** (local only) | Check OCR results next to the page image and approve them. |
-| **Storage** | Your passages, saved words and progress live in your browser, or in your own account with Google sign-in ([FIREBASE.md](FIREBASE.md)). |
+| Part | What you get | Time |
+|---|---|---|
+| 1. Install the tools | Python and Node.js on your Mac | 10 min |
+| 2. Get the project | The project folder, ready to use | 5 min |
+| 3. Set up Firebase | Your cloud database, Google sign-in and a key for publishing stories | 25 min |
+| 4. Publish the first stories | The 15 included stories in your database | 2 min |
+| 5. Open the site on your computer | The site working at `localhost` | 1 min |
+| 6. Put it on the internet (optional) | A web address you can open on your phone | 10 min |
+| 7. Adding stories later | The part you'll do again and again | 1 min each time |
 
-### Translation: how it works and what to know
+---
 
-- Translations come from **Google Translate**, requested **from your browser** (`public/translate.js`). There is no API key and the server never calls Google.
-- It uses the keyless endpoint Google's own widgets use. It is **unofficial**: Google may rate-limit or change it. When it fails, the panel says so and links to translate.google.com.
-- **What is sent to Google:** the word, phrase or sentence you click, and nothing else. Results are cached in your browser (`localStorage`, key `kr.gt`).
-- The **Translate to** menu in the header chooses English (default), Uzbek, Russian or Turkish. The Uzbek glosses of the old glossary are no longer stored or shown anywhere; use that menu if you want Uzbek.
-- The book data itself is stored as Korean headwords with level and unit only; meanings come from Google, never from the books' Uzbek column.
+## Words you will see
 
-### What the textbook lookup can and cannot do
+- **Terminal**: the Mac app where you type commands. Open it with Spotlight (`⌘ Space`, type `Terminal`, press Enter).
+- **Command**: a line you paste into the Terminal and run with Enter. Commands are in grey boxes in this guide.
+- **Folder** = **directory**. `cd` means "go into this folder".
+- **Project folder**: the folder named `Korean_Reading`. **Run every command from inside it.** If you open a new Terminal window, go back in first (Part 2b).
+- **Firebase**: a free Google service. Here it holds your stories and your read list.
+- **Firestore**: the database inside Firebase.
+- **Story**: one text with its title, summary, list of words and grammar to learn, and a few questions.
 
-Pasted text is matched against the glossary by simple rules (a noun plus a particle, or a regular verb/adjective stem plus a common ending). It has **no morphological analyser**, so irregular forms (`봤어요`, `와요`, `들어요` …) and compounds are not recognised, and the legend says "approximate". Grammar patterns are **not** detected in pasted text. In the stories, the colours come from hand-written markup (below), which is exact.
+**How to use the commands:** copy the whole grey box, paste it into the Terminal, press Enter. If something goes wrong, look at [Troubleshooting](#troubleshooting) at the end.
 
-## Requirements
+---
 
-- **macOS** only for the one-time PDF ingestion (Apple's built-in text extraction and Vision OCR, offline). The finished database and web app are not macOS-specific.
-- **Python 3.11+** (developed on 3.13), **Xcode Command Line Tools** (`xcode-select --install`, for `swift`)
-- Node.js only for the optional JS/e2e tests.
+## What the site looks like
 
-## 1. Install
+- **The front page** lists the stories by level (3A, 3B, 4A, 4B …) with a summary of each, and shows how many you have read ("3 of 15 read"). You can filter by level, and by "not read yet" or "read".
+- **A story page** shows the story. Words you should learn are **green**, grammar you should learn is **orange**. There are no boxes or underlines, only colour, so it stays easy to read.
+- **Click any word** and the side panel shows its translation (and the translation of the whole sentence). On a phone the panel slides up from the bottom.
+- **The read list:** press **Mark as read**, or just scroll down to the end of a long story and it is added automatically ("added to your read list ✓"). Press the button again to undo it. Short stories that fit on the screen need the button.
+- **Sign in with Google** (top right) saves your read list in your own private space in Firebase, so it follows you from your computer to your phone. Without signing in, the read list stays in the one browser you are using. When you sign in, what that browser already knew is added to your account.
+- The **Translate to** menu changes the translation language: English (default), Uzbek, Russian or Turkish.
+
+**About the translations:** they come from **Google Translate**, asked by your web browser when you click a word. You need internet for that. It uses the free, keyless endpoint that Google's own widgets use. That is unofficial, so Google could limit or change it. If it fails, the panel says so and gives you a link to open Google Translate yourself. Only the word or sentence you click is sent to Google.
+
+---
+
+## Part 1. Install the tools
+
+**1a. Python 3.11 or newer** (used to publish stories)
 
 ```bash
-cd Korean_Reading
+python3 --version
+```
+
+If it prints `Python 3.11` or higher, you're done. If not, download the installer from https://www.python.org/downloads/ , run it, close and reopen the Terminal, and check again.
+
+**1b. Node.js** (used for the Firebase and Vercel helper commands)
+
+```bash
+node --version
+```
+
+If it prints a version number, you're done. If it says `command not found`, download the "LTS" installer from https://nodejs.org/ , run it, and reopen the Terminal.
+
+You do **not** need Xcode or the textbook PDFs any more.
+
+---
+
+## Part 2. Get the project
+
+**2a.** Put the `Korean_Reading` folder somewhere easy, for example inside `Downloads/GitHub/`. If it is on GitHub:
+
+```bash
+cd ~/Downloads/GitHub
+git clone <the address of your repository> Korean_Reading
+```
+
+**2b.** Go into the project folder (do this in every new Terminal window):
+
+```bash
+cd ~/Downloads/GitHub/Korean_Reading
+```
+
+Change the path if your folder is somewhere else. Tip: type `cd ` and drag the folder from Finder into the Terminal window.
+
+**2c.** Install the project's Python tools. This makes a private Python environment (`.venv`) and installs what the publish script needs:
+
+```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt     # requirements.txt alone (FastAPI) is the lean runtime set used by Vercel
+.venv/bin/pip install -r requirements-dev.txt
 ```
 
-Use the project's own `.venv`; every command below spells out `.venv/bin/…` so another active environment can't shadow it.
+Lots of text scrolls by; that's normal. Every Python command in this guide starts with `.venv/bin/…` so the project's own Python is used.
 
-## 2. Put your textbooks in the project folder
+---
 
-The PDFs stay in the repo folder (git-ignored via `*.pdf`).
+## Part 3. Set up Firebase
 
-| File | Used for |
-|---|---|
-| `서울대 책 1a 부터 5b가지.pdf` | vocabulary glossary (headwords, level, unit) |
-| `서울 대 grammatikka kitob.pdf` | scanned grammar index (patterns, level) |
-| `3B SB.pdf`, `4A SB.pdf`, `4B SB.pdf` | student books (grammar explanations/examples) |
-| `3A WB.pdf`, `3B WB.pdf`, `4A WB.pdf`, `4B WB.pdf` | workbooks |
+**What Firebase does for you:** it stores the stories (everyone who opens your site can read them, nobody can change them from the website) and each person's read list (only that person can see it). The free plan ("Spark") is plenty and needs no credit card. You need a normal Google account.
 
-## 3. Build the knowledge base (one time)
+### 3a. Create the project
 
-The database is created at `data/app.sqlite`. **Run the steps in this order**, because the student-book step joins its explanations to the grammar index.
+1. Go to https://console.firebase.google.com and sign in.
+2. Click **Create a project** (or **Add project**), give it a name such as `korean-reading`, and click **Continue**.
+3. Switch Google Analytics **off** (you don't need it), click **Create project**, wait, and click **Continue**.
+
+### 3b. Turn on Google sign-in
+
+1. In the left menu click **Build**, then **Authentication**, then **Get started**.
+2. Open the **Sign-in method** tab, click **Google**, and switch **Enable** on.
+3. Choose a **support email** (your own) and click **Save**.
+
+### 3c. Create the database
+
+1. In the left menu click **Build**, then **Firestore Database**, then **Create database**.
+2. Pick a location close to you and click **Next**.
+3. Choose **Start in production mode** and click **Create**. (Production mode is the safe choice; step 3e installs the right rules.)
+
+### 3d. Copy your project's settings into the site
+
+1. Click the **gear icon** next to *Project Overview* (top left), then **Project settings**.
+2. Scroll down to **Your apps** and click the web icon **`</>`**.
+3. Give it any nickname, leave "Firebase Hosting" unticked, and click **Register app**.
+4. You'll see a block of code with `firebaseConfig`. You need four values from it: `apiKey`, `authDomain`, `projectId` and `appId`. Keep this page open.
+5. Open the file **`public/firebase-config.js`** in a text editor (TextEdit works; VS Code is nicer). Near the bottom, find this line:
+
+   ```js
+   window.KR_FIREBASE = window.KR_FIREBASE || null;
+   ```
+
+   Replace that one line with the following and put **your four values** between the quotes:
+
+   ```js
+   window.KR_FIREBASE = {
+     apiKey: "PASTE-YOUR-apiKey-HERE",
+     authDomain: "PASTE-YOUR-authDomain-HERE",
+     projectId: "PASTE-YOUR-projectId-HERE",
+     appId: "PASTE-YOUR-appId-HERE"
+   };
+   ```
+
+   Save the file.
+
+   *Is it safe to put these in a file?* Yes. They only say "which Firebase project is this?" and are not passwords. What protects your data are the rules in the next step.
+
+### 3e. Install the security rules (do not skip)
+
+This sends the project's `firestore.rules` file to Firebase. Run these three commands, one at a time:
 
 ```bash
-.venv/bin/python -m backend.app.ingest.import_glossary "서울대 책 1a 부터 5b가지.pdf"
-.venv/bin/python -m backend.app.ingest.import_grammar_index "서울 대 grammatikka kitob.pdf"
-
-for b in "3B SB" "4A SB" "4B SB"; do swift backend/app/ingest/vision_ocr.swift "$b.pdf" "data/ocr/${b// /_}"; done   # slow, resumable
-for b in "3B SB" "4A SB" "4B SB"; do .venv/bin/python -m backend.app.ingest.import_student_book "$b.pdf"; done
-
-for b in "3A WB" "3B WB" "4A WB" "4B WB"; do swift backend/app/ingest/vision_ocr.swift "$b.pdf" "data/ocr/${b// /_}"; done
-for b in "3A WB" "3B WB" "4A WB" "4B WB"; do .venv/bin/python -m backend.app.ingest.import_workbook "$b.pdf"; done
+npx firebase-tools@latest login
 ```
 
-- OCR takes roughly 10–15 minutes per book and is **resumable** (pages with a `.json` in `data/ocr/<book>/` are skipped). Add two numbers to OCR a page range: `swift … "4A SB.pdf" data/ocr/4A_SB 148 247`.
-- A first import refuses to run twice; re-running needs `--force`. `import_glossary --force` replaces all vocabulary and discards manual edits; `import_grammar_index --force` and `import_student_book --force` keep items you corrected (`corrected=1`). After `import_grammar_index --force`, re-run the student-book and workbook steps.
-- Everything imported from scans is `needs_review` until you approve it in the **Review** tab.
-- **No Uzbek is kept.** The importers read the Uzbek column only to find where an entry ends and store the Korean headword, level, unit and page.
-- **Already have a database from the older (Uzbek/Kiwi) version?** Run `.venv/bin/python scripts/maintenance.py drop-uzbek`. It backs the database up to `data/app.sqlite.before-uzbek-removal`, clears the Uzbek meanings, the OCR text of the glossary and index pages, and the old analysis tables, then vacuums. (The raw OCR JSON under `data/ocr/` still contains the Uzbek source text; it is never served and is git-ignored.)
-
-## 4. Run the app
+A browser window opens. Sign in with the same Google account and allow access.
 
 ```bash
-.venv/bin/uvicorn backend.app.main:app --port 8765
+npx firebase-tools@latest use --add
 ```
 
-Open http://localhost:8765. Add `--reload` while developing.
-
-> **The local app has no login** (it has edit, delete and re-import endpoints). Keep the default `127.0.0.1` binding; don't use `--host 0.0.0.0` on a shared network. The deployed Vercel edition is read-only.
-
-## 5. Stories
-
-The 15 stories live in `content/stories/*.json` (3 × 3A, 4 × 3B, 4 × 4A, 4 × 4B). Each lists its `target_vocab` and `target_grammar` and marks them **inline in the text**:
-
-```
-저는 [[동아리를|동아리]] 찾았지만 <<싶지만|V+고 싶다>> …
-```
-
-- `[[shown text|glossary headword]]` colours a word to learn; `<<shown text|grammar pattern>>` colours a grammar point. The marks are removed when the story is loaded, so no analysis runs in the browser or on the server.
-- Only whole words are coloured and marks never contain spaces; the checker enforces this.
-- **Adding a story:** copy a file, keep the fields (`id` = file name, `level`, `title`, `text`, `target_grammar` = exact pattern strings from the Grammar tab, `target_vocab` = glossary headwords without the bracketed part, `questions`, `summary_en`), then run:
+Use the arrow keys to pick your project, press Enter, and type any short nickname when asked (for example `default`).
 
 ```bash
-.venv/bin/python scripts/check_stories.py          # all stories (or: check_stories.py 4b)
+npx firebase-tools@latest deploy --only firestore:rules
 ```
 
-It prints OK/!! per story: every target must be marked at least once, every mark must refer to a declared target, every target must exist in your database, marks must not overlap and no markup may be left over. `pytest` runs the same check for every story against `data/app.sqlite` (skipped when that file doesn't exist).
+You should see `Deploy complete!`.
 
-## 6. Using the site
+The rules say: *everyone can read the stories, nobody can change them from the website, and each person can read and write only their own read list.*
 
-1. **Stories** → *Read*. Click any word; the panel shows the Google translation of the word, the phrase it belongs to (for a coloured span) and its sentence, then the textbook entry. Press *Save* to keep a word or grammar point as a flashcard.
-2. **Reader** → paste text → *Open to read*. Green words are in your textbooks' word list (approximate). Passages are saved in your browser/account; you can mark them as read and write your own comprehension questions.
-3. **Study** → *Flashcards*: a session is every due card plus the number of new cards you choose (from saved items, or a level's word list/grammar). Grade Again / Hard / Good / Easy; the next review follows SM-2 (`backend/app/services/srs.py`). The answer side shows the Google translation of a word, or the book's explanation and examples for grammar.
-4. **Grammar / Vocabulary / Workbook** tabs: search and browse; the local app can also edit and add entries by hand.
-5. **Review** tab (local only): page image next to the editable fields. Fix, then *Save & approve*.
+### 3f. Get a key so Claude (or you) can publish stories
 
-### What was removed
+Adding stories to the database is done by a script on your Mac, not by the website. The script proves who it is with a **service-account key**: a small file that works like a password for your project.
 
-The earlier version analysed pasted text with the Kiwi morphological analyser. That is gone on purpose, together with what depended on it: automatic grammar detection in pasted text, generated grammar/vocabulary exercises, workbook answer checking, the calibration report, and all Uzbek meanings. The reader now relies on the stories' hand-written colours, Google Translate and the textbooks' own entries.
+1. Firebase console → **gear icon → Project settings → Service accounts** tab.
+2. Click **Generate new private key**, confirm, and a `.json` file downloads.
+3. Move it into the project, under exactly this name:
 
-## 7. Tests
+   ```bash
+   mkdir -p secrets
+   mv ~/Downloads/*firebase-adminsdk*.json secrets/firebase-service-account.json
+   ```
+
+   If that `mv` command says "No such file", find the downloaded file in Finder and drag it into the `secrets` folder, then rename it `firebase-service-account.json`.
+
+**Keep this file private.** Anyone who has it can change your database. The project is set up so it is **never committed to Git and never uploaded to your website** (the `secrets` folder is ignored in both). Don't email it or paste it into a chat. If it ever leaks, delete the key in the same Firebase page and generate a new one.
+
+---
+
+## Part 4. Publish the first stories
+
+The project comes with 15 stories (levels 3A–4B) in the folder `content/stories/`. Put them in your database:
 
 ```bash
-.venv/bin/python -m pytest -q                       # backend, importers, stories, lookup, deploy-DB builder
-node --test tests/js/*.test.js                      # Google-response parser, study-data splitting
-npm --prefix tests/firebase install                 # once
-npx firebase-tools@13.35.1 emulators:exec --only firestore --project demo-kr "cd tests/firebase && node rules.test.js"
+.venv/bin/python scripts/publish_stories.py
 ```
 
-Real-browser end-to-end tests (Playwright; Google Translate is **mocked** so they never contact Google):
+It first **checks every story** (all the words and grammar are marked, nothing is broken), then uploads them. You should see a line per story starting with `OK`, and at the end:
+
+```
+published 15 stories to Firebase project 'your-project'.
+```
+
+You can look at them in the Firebase console → **Firestore Database → Data → `stories`**.
+
+Running it again is always safe: it just overwrites the same stories.
+
+---
+
+## Part 5. Open the site on your computer
 
 ```bash
-npm --prefix tests/e2e install && (cd tests/e2e && npx playwright install chromium)    # once
-KR_READ_ONLY=1 KR_DB_PATH=deploy/app.sqlite .venv/bin/uvicorn backend.app.main:app --port 8768 &
-node tests/e2e/reader.e2e.js                        # stories, colours-only check, side panel, language menu, lookup, saved words, phone width
-npx firebase-tools@13.35.1 emulators:exec --only auth,firestore --project demo-kr "node tests/e2e/firebase.e2e.js http://localhost:8768"
+.venv/bin/python -m http.server 8765 --directory public
 ```
 
-`tests/test_no_external_ai.py` fails if an AI SDK or key appears anywhere, if the server makes an outbound request, or if any front-end file other than the Firebase/Google ones names a remote host.
+Open **http://localhost:8765** in your browser. (Use the word `localhost`, not `127.0.0.1`: Google sign-in only accepts `localhost`.)
 
-## Project layout
+You should see the list of 15 stories. Try this:
 
-```
-backend/app/
-  main.py  config.py  db.py  schema.sql  deps.py
-  services/   common.py  lookup.py  stories.py  srs.py
-  routers/    vocab  grammar  admin  workbook  study  stories  misc
-  ingest/     glossary_parser  grammar_index_parser  sb_grammar_parser
-              import_glossary  import_grammar_index  import_student_book  wb_parser  import_workbook
-              vision_ocr.swift  pdf_text.swift
-content/stories/   the 15 stories (JSON with inline markup)
-public/       index.html  app.js  stories.js  study.js  store.js  studydocs.js  translate.js  firebase-config.js  styles.css
-app.py        Vercel entrypoint
-scripts/      build_deploy_db.py  check_stories.py  maintenance.py
-deploy/       app.sqlite — slim read-only DB for Vercel (git-ignored, built by the script)
-data/         app.sqlite, OCR JSON + page images   (git-ignored)
-tests/
-```
+1. Click **Read** on a story.
+2. Click a green word, then an orange one. The translation appears on the right.
+3. Click **Sign in with Google** (top right), sign in, then press **Mark as read**.
+4. In Firebase → Firestore → Data you'll now see `users → your id → read → the story`.
 
-## Troubleshooting
+To stop the site, go to the Terminal and press `Ctrl C`. To start it again, open the Terminal, `cd` into the project (Part 2b) and run the command above again.
 
-- **`swift: command not found`**: run `xcode-select --install`.
-- **Import says "already imported"**: re-run with `--force` (read the notes in step 3 first).
-- **Grammar items have no explanation**: only 3B, 4A and 4B have student books here; other levels have just the pattern from the scanned index.
-- **The panel says it couldn't reach Google Translate**: you are offline, a blocker stops the request, or Google rate-limited you. Use the link under the message, or try again later.
-- **A pasted word isn't coloured**: the lookup is approximate (irregular forms are missed). It is still clickable and translates.
-- **Start over**: stop the server, delete `data/app.sqlite`, repeat step 3. OCR output in `data/ocr/` is reused.
-- **Back up** `data/app.sqlite` before big re-imports; it holds your corrections.
+---
 
-## 8. Deploy to Vercel (public, read-only)
+## Part 6. Put the site on the internet (optional)
 
-> The full guide (verification, rollback, troubleshooting) is **[DEPLOYMENT.md](DEPLOYMENT.md)**. Short version:
+This uses **Vercel**, a free service that hosts websites. The site is just the files in the `public` folder, so there is no server to run. After this, you can read your stories on your phone.
 
-The deployed site serves the textbook data and stories read-only; every visitor's passages, saved words and progress stay in their own browser (or their own Google account, see [FIREBASE.md](FIREBASE.md)). Write and admin endpoints return 403.
+**6a.** Make a free account at https://vercel.com/signup, then log in from the Terminal:
 
 ```bash
-.venv/bin/python scripts/build_deploy_db.py     # data/app.sqlite -> deploy/app.sqlite (~1.7 MB: no OCR pages, no Uzbek, no personal data)
+npx vercel@latest login
+```
+
+**6b.** Create the project (the name must be lowercase) and publish:
+
+```bash
 npx vercel@latest link --yes --project korean-reading
-npx vercel@latest git disconnect --yes          # `link` connects the GitHub repo; keep it disconnected (the DB is git-ignored)
 npx vercel@latest deploy --prod --yes
 ```
 
-- `deploy/app.sqlite` is **git-ignored on purpose** (text extracted from your textbooks), so deploy with the CLI, not from a Git push.
-- The production URL is open to anyone with the link; per-deployment URLs sit behind Vercel's Deployment Protection.
-- Without Kiwi the function is tiny (FastAPI + SQLite only), so cold starts are fast.
-- Test the same mode locally: `KR_READ_ONLY=1 .venv/bin/uvicorn backend.app.main:app`.
+At the end it prints your website address, for example `https://korean-reading-xxxx.vercel.app`.
 
-**Copyright:** the deployed database contains Korean vocabulary and grammar text extracted from your textbooks. A public URL makes it readable by anyone; check that this is acceptable. PDFs, page images and raw OCR text are not deployed. The stories are your own content.
+**6c.** Tell Firebase about that address, or "Sign in with Google" will not work there:
+Firebase console → **Authentication → Settings → Authorized domains → Add domain**. Type the address **without** `https://` (for example `korean-reading-xxxx.vercel.app`) and click **Add**.
 
-## Privacy
+**6d.** Open the address on your phone, sign in with the same Google account, and your read list is there.
 
-Locally, everything runs on your machine. The only outside request the site makes is the browser's call to Google Translate for the text you click (and Firebase, if you enable sign-in). The PDFs, database and OCR output are git-ignored.
+**You only deploy the website again if you change the website itself** (for example `public/app.js` or the colours). **New stories do not need a redeploy**: they live in Firebase.
+
+Useful extras:
+
+- Undo a bad update: `npx vercel@latest ls` lists deployments; `npx vercel@latest rollback <that-address>` goes back to an older one.
+- Take the site down: `npx vercel@latest remove korean-reading --confirm-name korean-reading`.
+- Require a Vercel login to open it: `npx vercel@latest project protection enable korean-reading`.
+
+---
+
+## Part 7. Adding more stories (every time you want new ones)
+
+**The easy way:** open this project in Claude Code and say something like:
+
+> Write 5 new stories for level 4A about travel and shopping, and publish them.
+
+Claude writes the story files into `content/stories/`, checks them, and runs the publish script for you. The new stories appear on your site the next time you refresh the page. You can also ask for things like "make them a bit easier", "a story about my university life", or "rewrite story 3a-02".
+
+**What Claude needs from you:** only the key from Part 3f, saved at `secrets/firebase-service-account.json`.
+
+**The manual way** (if you write a story yourself): add a file `content/stories/<id>.json` and run `.venv/bin/python scripts/publish_stories.py`. Useful options:
+
+| Command | What it does |
+|---|---|
+| `.venv/bin/python scripts/publish_stories.py --dry-run` | Only checks the stories; publishes nothing. |
+| `.venv/bin/python scripts/publish_stories.py --only 4a-05` | Publishes only stories whose id starts with `4a-05`. |
+| `.venv/bin/python scripts/publish_stories.py --prune` | Also **deletes** stories from Firebase whose file you removed. |
+
+**Removing a story:** delete its file, then run the publish command with `--prune`. (Your read list keeps the old id; it doesn't matter.)
+
+### What a story file looks like
+
+```json
+{
+  "id": "4a-05-travel",
+  "level": "4A",
+  "title": "...",
+  "theme": "Travel",
+  "summary_en": "One or two sentences in English.",
+  "text": "저는 [[여행을|여행]] 갈 <<계획이에요|V+(으)ㄹ 계획이다>>. ...",
+  "target_vocab": ["여행"],
+  "target_grammar": ["V+(으)ㄹ 계획이다"],
+  "questions": [{ "q": "질문?", "a": "대답" }]
+}
+```
+
+- `id` is the file name without `.json`: lowercase letters, digits and dashes only.
+- The colours are written **inside the text**: `[[shown text|word]]` makes a green word to learn, `<<shown text|pattern>>` makes an orange grammar point. The marks are removed before the story is shown.
+- Every word in `target_vocab` and every pattern in `target_grammar` must be marked at least once, and every mark must refer to something in those lists. The publish script checks this and tells you exactly what's wrong, and then **publishes nothing** until it is fixed.
+- Marks don't start or end with a space, and never overlap.
+
+### Why the stories sit in a database and not in the website
+
+Because that way a new story is one command and is live immediately for everybody, with no new version of the website to build and publish. The files in `content/stories/` stay as your master copy (and as backup).
+
+---
+
+## Troubleshooting
+
+| What you see | What it means and what to do |
+|---|---|
+| The page says **"Firebase is not set up yet"** | `public/firebase-config.js` still says `|| null`. Do Part 3d, save, and reload the page. |
+| **"Firebase refused to send the stories … rules have not been installed"** | Do Part 3e (`deploy --only firestore:rules`). |
+| The page says "There are no stories yet" | Run Part 4 (`publish_stories.py`). |
+| `Service-account key not found` | The key is missing or has the wrong name. Redo Part 3f; the path must be `secrets/firebase-service-account.json`. |
+| `The Firebase library is missing` | Run `.venv/bin/pip install -r requirements-dev.txt` (Part 2c). |
+| `No such file or directory: .venv/bin/…` | You skipped Part 2c, or you're not in the project folder. |
+| The publish script prints `PROBLEM: …` and publishes nothing | A story file has a mistake. The line says which one and what. Fix that file and run it again. |
+| `Permission denied` / `7 PERMISSION_DENIED` when publishing | The key belongs to a different Firebase project, or Firestore (Part 3c) was never created. |
+| `Address already in use` when starting the site | Another copy is still running. Press `Ctrl C` in the other Terminal window, or use another number instead of `8765` (in the command and the address). |
+| No "Sign in with Google" button | Firebase isn't set up yet (first row), or you didn't reload the page. |
+| `auth/unauthorized-domain` | Add the address under Authentication → Settings → Authorized domains (Part 6c). On your computer, use `localhost`, not `127.0.0.1`. |
+| `auth/operation-not-allowed` | Turn on the Google sign-in method (Part 3b). |
+| The sign-in popup closes or doesn't open | Allow popups for the site and try again. |
+| Signed in, but my read list is empty | You're signed in with a different Google account, or the stories were read in another browser before signing in. Sign in there once and it joins your account. |
+| The translation shows an error | Google Translate is busy, blocked or you're offline. Use the link in the panel, or try again in a minute. |
+| A story I published doesn't show up | Reload the page. Check the story id isn't the same as another one (the same id overwrites). |
+| Vercel: "project names must be lowercase" | Use `--project korean-reading` exactly as written. |
+| I changed `public/…` and the live site is unchanged | Deploy again: `npx vercel@latest deploy --prod --yes`. |
+
+---
+
+## For later
+
+**The pieces.** The website is plain files in `public/` (no build step, no server): `index.html`, `app.js`, `core.js` (small helper functions), `translate.js` (Google Translate), `firebase-config.js` (your Firebase settings), `styles.css`. Stories and read lists are read and written straight from the browser to Firebase, protected by `firestore.rules`.
+
+**What is stored where**
+
+| Data | Where | Who can see it |
+|---|---|---|
+| Stories | Firestore `stories/<id>` | everyone can read; only the publish script writes |
+| Your read list | Firestore `users/<your id>/read/<story id>` (signed in) or this browser (signed out) | only you |
+| Translations | not stored; cached in your browser | n/a |
+
+**Costs and limits.** The free Firebase plan allows about 50,000 document reads a day. Opening the front page reads every story once (15 reads today), so a few hundred visits a day with a few dozen stories is fine.
+
+**Privacy.** The only outside requests the site makes are to Firebase, to Google Translate for the text you click, and to Google's servers that load the Firebase scripts. The service-account key never leaves your computer.
+
+**Tests** (optional, for developers):
+
+```bash
+.venv/bin/python -m pytest -q
+node --test tests/js/*.test.js
+npm --prefix tests/firebase install
+npx firebase-tools@13.35.1 emulators:exec --only firestore --project demo-kr "cd tests/firebase && node rules.test.js"
+npm --prefix tests/e2e install && (cd tests/e2e && npx playwright install chromium)
+npx firebase-tools@13.35.1 emulators:exec --only auth,firestore --project demo-kr "bash tests/e2e/run-site.sh"
+```
+
+The last command publishes the stories into a local Firebase emulator and drives the real site in a headless browser (34 checks: list, colours, translation panel, read list, two devices, sign-out, phone layout, security rules). No Google account is needed and Google Translate is mocked. Firebase tools version 13 needs Java 17.
+
+**Older parts of the project.** Earlier versions of this project also had a textbook database built from your PDFs, flashcards, a grammar and workbook browser, and a Python server. The website no longer uses any of that. The code is still there if you want it: `backend/` (server and PDF importers), `scripts/build_deploy_db.py`, `scripts/check_stories.py` (checks stories against the textbook database), and the whole old web interface in `legacy/`. You can ignore these folders, or delete them if you don't need them.
+
+**Project layout**
+
+```
+public/            the website (what Vercel serves)
+content/stories/   your stories: the master copies
+scripts/           publish_stories.py (check + publish), storylib.py (story format)
+firestore.rules    Firebase security rules (Part 3e)
+firebase.json      emulator settings for the tests
+vercel.json        tells Vercel the site is just the public/ folder
+secrets/           your service-account key (private, never uploaded)
+tests/             automatic tests
+legacy/ backend/   the earlier version (not used by the site)
+```

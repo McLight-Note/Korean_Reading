@@ -159,3 +159,25 @@ def test_drop_uzbek_maintenance_backs_up_and_clears(tmp_path):
     out = sqlite3.connect(path)
     assert out.execute("SELECT headword FROM vocab_entry").fetchone()[0] == "차"
     assert out.execute("SELECT text FROM ocr_page").fetchone()[0] is None
+
+
+# ---- importers: clear errors, and a fresh import never re-stores the Uzbek OCR text ----
+def test_importers_report_a_missing_pdf_clearly(tmp_path, monkeypatch, capsys):
+    from backend.app.ingest import import_glossary, import_grammar_index
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "m.sqlite")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    for mod in (import_glossary, import_grammar_index):
+        with pytest.raises(SystemExit, match="PDF not found"):
+            mod.main(["nope.pdf"])
+
+
+def test_glossary_and_index_imports_do_not_store_ocr_text(tmp_path, monkeypatch):
+    from backend.app.ingest import import_glossary
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "g.sqlite")
+    pdf = tmp_path / "g.pdf"; pdf.write_bytes(b"%PDF")
+    monkeypatch.setattr(import_glossary, "extract_text_pages", lambda p: [{"pdf_page": 1, "text": "서울대 1A\n1 과\n차 mashina"}])
+    assert import_glossary.main([str(pdf)]) == 0
+    c = db.connect()
+    assert c.execute("SELECT text FROM ocr_page").fetchone()[0] is None
+    assert c.execute("SELECT meaning_uz FROM vocab_entry").fetchone()[0] is None if c.execute("SELECT COUNT(*) FROM vocab_entry").fetchone()[0] else True
+    assert import_glossary.main([str(pdf)]) == 1                       # second run is refused before any work is done

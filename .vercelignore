@@ -1,21 +1,23 @@
-# What is NOT uploaded to Vercel. (When this file exists the CLI uses it instead of .gitignore, so the
-# gitignored deploy/app.sqlite IS uploaded, which is intended.)
+# The site is just the files in public/ (static). Everything else stays on your computer.
 .venv
 .git
+backend
+content
 data
-tests
+deploy
+legacy
 scripts
+secrets
+tests
 .pytest_cache
 __pycache__
 *.pdf
 *.png
+*.md
 .DS_Store
-README.md
-requirements-dev.txt
 .env*
 .vercel
-scripts
 firebase.json
 firestore.rules
 .firebaserc
-*.md
+requirements-dev.txt

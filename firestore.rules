@@ -6,27 +6,19 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == uid;
     }
 
-    // Everything a learner stores lives under users/{their own uid}. Nobody else can read or write it.
-    match /users/{uid}/passages/{id} {
-      allow read, delete: if owner(uid);
-      allow create, update: if owner(uid)
-        && request.resource.data.keys().hasOnly(['title', 'text', 'createdAt', 'updatedAt'])
-        && request.resource.data.text is string
-        && request.resource.data.text.size() <= 20000
-        && (!('title' in request.resource.data) || request.resource.data.title == null
-            || (request.resource.data.title is string && request.resource.data.title.size() <= 200));
+    // The stories: everyone may read them, nobody may change them from the website.
+    // (They are written by scripts/publish_stories.py with the service-account key, which bypasses these rules.)
+    match /stories/{id} {
+      allow read: if true;
+      allow write: if false;
     }
 
-    match /users/{uid}/saved/{id} {
+    // Each person's read list: users/{their own uid}/read/{storyId} = { t: <timestamp in ms> }. Nobody else can see it.
+    match /users/{uid}/read/{id} {
       allow read, delete: if owner(uid);
       allow create, update: if owner(uid)
-        && request.resource.data.keys().hasOnly(['kind', 'ref_id', 'text', 'sentence', 'item', 't'])
-        && request.resource.data.kind in ['vocab', 'grammar', 'word'];
-    }
-
-    // Study progress: split into small documents by the app (meta, cards_N, log_YYYY-MM, ex_YYYY-MM).
-    match /users/{uid}/study/{id} {
-      allow read, write: if owner(uid);
+        && request.resource.data.keys().hasOnly(['t'])
+        && request.resource.data.t is number;
     }
 
     // Everything else is closed.

@@ -25,7 +25,16 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     pdf = Path(args.pdf)
     ocr_dir = config.DATA_DIR / "ocr" / "grammar_book"
-    subprocess.run(["swift", str(SWIFT), str(pdf), str(ocr_dir)], check=True, capture_output=True)   # resumable
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM source WHERE filename=? AND kind='grammar_index'", (pdf.name,)).fetchone() and not args.force:
+            print("already imported; use --force to replace (manual corrections to uncorrected items would be lost)")
+            return 1
+    if not pdf.is_file() and not list(ocr_dir.glob("page_*.json")):
+        raise SystemExit(f"PDF not found: {pdf}. Run this from the project folder with the PDF in it.")
+    if pdf.is_file():
+        res = subprocess.run(["swift", str(SWIFT), str(pdf), str(ocr_dir)], capture_output=True, text=True)   # resumable
+        if res.returncode:
+            raise SystemExit(f"OCR failed for {pdf}: {(res.stderr or 'unknown error').strip()[-500:]}")
     items = parse_ocr_dir(ocr_dir)
     with db.session() as conn:
         row = conn.execute("SELECT id FROM source WHERE filename=? AND kind='grammar_index'", (pdf.name,)).fetchone()
@@ -45,9 +54,8 @@ def main(argv=None) -> int:
                 (it.pattern, pattern_key(it.pattern), it.level, it.pdf_page, it.pdf_page, sid, "needs_review", it.entry_no))
         for jp in sorted(ocr_dir.glob("page_*.json")):          # raw pages + images for the review UI
             d = json.loads(jp.read_text(encoding="utf-8"))
-            conn.execute("INSERT OR REPLACE INTO ocr_page(source_id, pdf_page, text, lines_json, image_path) VALUES (?,?,?,?,?)",
-                         (sid, d["pdf_page"], "\n".join(l["text"] for l in d["lines"]), json.dumps(d["lines"], ensure_ascii=False),
-                          f"{ocr_dir.name}/{jp.stem}.jpg"))
+            conn.execute("INSERT OR REPLACE INTO ocr_page(source_id, pdf_page, image_path) VALUES (?,?,?)",      # image only: the OCR text holds the Uzbek glosses
+                         (sid, d["pdf_page"], f"{ocr_dir.name}/{jp.stem}.jpg"))
         db.bump(conn, "rules_version")
     print(f"imported {len(items)} grammar index items")
     return 0

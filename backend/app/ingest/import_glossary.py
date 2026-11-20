@@ -24,7 +24,9 @@ SWIFT = Path(__file__).with_name("pdf_text.swift")
 def extract_text_pages(pdf: Path) -> list[dict]:
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "text.json"
-        subprocess.run(["swift", str(SWIFT), str(pdf), str(out)], check=True, capture_output=True)
+        res = subprocess.run(["swift", str(SWIFT), str(pdf), str(out)], capture_output=True, text=True)
+        if res.returncode:
+            raise SystemExit(f"could not read {pdf}: {(res.stderr or 'unknown error').strip()[-500:]}")
         return json.loads(out.read_text(encoding="utf-8"))
 
 
@@ -51,6 +53,12 @@ def main(argv=None) -> int:
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args(argv)
     pdf = Path(args.pdf)
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM source WHERE filename=? AND kind='glossary'", (pdf.name,)).fetchone() and not args.force:
+            print("already imported; use --force to replace (manual corrections would be lost)")
+            return 1
+    if not pdf.is_file():
+        raise SystemExit(f"PDF not found: {pdf}. Run this from the project folder with the PDF in it.")
     sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
     pages = extract_text_pages(pdf)
     entries = parse_pages(pages)
@@ -68,7 +76,7 @@ def main(argv=None) -> int:
         ).lastrowid
         n = import_entries(conn, entries, sid)
         for pg in pages:
-            conn.execute("INSERT INTO ocr_page(source_id, pdf_page, text) VALUES (?,?,?)", (sid, pg["pdf_page"], pg["text"]))
+            conn.execute("INSERT INTO ocr_page(source_id, pdf_page) VALUES (?,?)", (sid, pg["pdf_page"]))      # no text: it holds the Uzbek column
     print(f"imported {n} vocabulary entries")
     return 0
 
