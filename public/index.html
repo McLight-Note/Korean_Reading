@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>서울대 Reader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;600;700&family=Source+Serif+4:wght@400;600&display=swap">
+<script>try{var t=localStorage.getItem("kr.theme");if(t==="dark"||t==="light")document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -12,6 +16,7 @@
   <span class="spacer"></span>
   <label class="langbox" title="Language of the Google Translate results">Translate to <select id="lang"></select></label>
   <span id="auth-box" class="auth" hidden></span>
+  <button id="theme-toggle" class="iconbtn" type="button" aria-label="Dark mode" aria-pressed="false" title="Switch light / dark">◐</button>
 </header>
 
 <div id="banner" class="banner" role="alert" hidden></div>
@@ -51,6 +56,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
+<script src="theme.js"></script>
 <script src="core.js"></script>
 <script src="translate.js"></script>
 <script src="firebase-config.js"></script>

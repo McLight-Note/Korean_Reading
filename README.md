@@ -328,7 +328,7 @@ Because that way a new story is one command and is live immediately for everybod
 
 ## For later
 
-**The pieces.** The website is plain files in `public/` (no build step, no server): `index.html`, `app.js`, `core.js` (small helper functions), `translate.js` (Google Translate), `firebase-config.js` (your Firebase settings), `styles.css`. Stories and read lists are read and written straight from the browser to Firebase, protected by `firestore.rules`.
+**The pieces.** The website is plain files in `public/` (no build step, no server): `index.html`, `app.js`, `core.js` (small helper functions), `theme.js` (the light/dark toggle), `translate.js` (Google Translate), `firebase-config.js` (your Firebase settings), `styles.css`. Stories and read lists are read and written straight from the browser to Firebase, protected by `firestore.rules`.
 
 **What is stored where**
 
